@@ -1,0 +1,18 @@
+// src/config/env.validation.ts
+import { z } from 'zod';
+
+export const envSchema = z.object({
+  NODE_ENV: z.enum(['development', 'production', 'test']),
+  PORT: z.string(),
+
+  DB_HOST: z.string(),
+  DB_PORT: z.string(),
+  DB_NAME: z.string(),
+  DB_USER: z.string(),
+  DB_PASSWORD: z.string(),
+
+  JWT_SECRET: z.string(),
+  JWT_EXPIRES_IN: z.string(),
+});
+
+export type EnvVars = z.infer<typeof envSchema>;
