@@ -31,6 +31,29 @@
 $ npm install
 ```
 
+## Database setup
+
+1. Make sure PostgreSQL is running and create a database
+2. Set up your environment variables (create a `.env` file):
+   ```
+   DB_HOST=localhost
+   DB_PORT=5432
+   DB_NAME=your_database_name
+   DB_USER=your_database_user
+   DB_PASSWORD=your_database_password
+   JWT_SECRET=your_jwt_secret
+   JWT_EXPIRES_IN=1d
+   ```
+3. Initialize the database schema:
+   ```bash
+   $ npm run db:init
+   ```
+
+Alternatively, you can manually run the SQL schema file:
+```bash
+$ psql -U your_user -d your_database -f database/schema.sql
+```
+
 ## Compile and run the project
 
 ```bash
