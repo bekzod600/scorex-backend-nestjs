@@ -4,32 +4,26 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 import { config } from 'dotenv';
 
-// Load environment variables from .env file
 config();
 
-async function initSchema() {
-  // Validate required environment variables
-  const requiredEnvVars = [
-    'DB_HOST',
-    'DB_PORT',
-    'DB_NAME',
-    'DB_USER',
-    'DB_PASSWORD',
-  ];
+const REQUIRED_ENV = [
+  'DB_HOST',
+  'DB_PORT',
+  'DB_NAME',
+  'DB_USER',
+  'DB_PASSWORD',
+];
 
-  const missingVars = requiredEnvVars.filter(
-    (varName) => !process.env[varName],
-  );
-
-  if (missingVars.length > 0) {
-    console.error(
-      `Missing required environment variables: ${missingVars.join(', ')}`,
-    );
-    console.error(
-      'Please create a .env file or set these environment variables.',
-    );
+function validateEnv() {
+  const missing = REQUIRED_ENV.filter((k) => !process.env[k]);
+  if (missing.length) {
+    console.error('❌ Missing env vars:', missing.join(', '));
     process.exit(1);
   }
+}
+
+async function initSchema() {
+  validateEnv();
 
   const pool = new Pool({
     host: process.env.DB_HOST,
@@ -37,20 +31,28 @@ async function initSchema() {
     database: process.env.DB_NAME,
     user: process.env.DB_USER,
     password: process.env.DB_PASSWORD,
+    ssl: false,
   });
 
-  try {
-    console.log('Connecting to database...');
-    const schemaPath = join(__dirname, 'schema.sql');
-    const schema = readFileSync(schemaPath, 'utf-8');
+  const client = await pool.connect();
 
-    console.log('Running schema...');
-    await pool.query(schema);
-    console.log('Schema initialized successfully!');
-  } catch (error) {
-    console.error('Error initializing schema:', error);
+  try {
+    console.log('🚀 Connected to DB');
+
+    const schemaPath = join(__dirname, 'schema.sql');
+    const schema = readFileSync(schemaPath, 'utf8');
+
+    await client.query('BEGIN');
+    await client.query(schema);
+    await client.query('COMMIT');
+
+    console.log('✅ Schema initialized successfully');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('❌ Schema init failed:', err);
     process.exit(1);
   } finally {
+    client.release();
     await pool.end();
   }
 }
