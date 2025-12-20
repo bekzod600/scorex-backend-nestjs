@@ -1,14 +1,21 @@
-import { Inject, Injectable, BadRequestException } from '@nestjs/common';
+import {
+  Inject,
+  Injectable,
+  BadRequestException,
+  Optional,
+} from '@nestjs/common';
 import { Pool } from 'pg';
 import { CreateSignalDto } from './dto/create-signal.dto';
 import { SignalStatus } from './constants/signal.constants';
 import { FilterMatcherService } from 'src/filters/filter-matcher.service';
 import { ActiveSymbolsService } from 'src/pricing/active-symbols.service';
+import Redis from 'ioredis';
 
 @Injectable()
 export class SignalsService {
   constructor(
     @Inject('PG_POOL') private readonly pool: Pool,
+    @Optional() @Inject('REDIS') private readonly redis: Redis,
     private readonly filterMatcher: FilterMatcherService,
     private readonly activeSymbols: ActiveSymbolsService,
   ) {}
@@ -40,11 +47,19 @@ export class SignalsService {
       seller_scorex: 1000, // keyin join bilan olamiz
     });
     await this.activeSymbols.touch(dto.ticker, 'signal_created');
+    await this.redis.del('signals:list');
 
     return rows[0];
   }
 
   async list(viewerId?: string) {
+    const cacheKey = 'signals:list';
+
+    const cached = await this.redis.get(cacheKey);
+    if (cached) {
+      return JSON.parse(cached);
+    }
+
     const { rows } = await this.pool.query(
       `
       SELECT s.*,
@@ -57,6 +72,8 @@ export class SignalsService {
       `,
       [viewerId ?? null],
     );
+
+    await this.redis.set(cacheKey, JSON.stringify(rows), 'EX', 15);
 
     return rows.map((s) => ({
       ...s,
@@ -91,7 +108,7 @@ export class SignalsService {
     if (!rows[0]) {
       throw new BadRequestException('Signal not found');
     }
-
+    await this.redis.del('signals:list');
     return rows[0];
   }
 }

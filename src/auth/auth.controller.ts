@@ -6,6 +6,7 @@ import {
   JwtAuthGuard,
   type AuthenticatedRequest,
 } from '../common/guards/jwt-auth.guard';
+import { Throttle } from '@nestjs/throttler';
 
 @Controller('auth')
 export class AuthController {
@@ -16,6 +17,7 @@ export class AuthController {
     return this.authService.register(dto.email, dto.password, dto.name);
   }
 
+  @Throttle({ default: { limit: 10, ttl: 60 } })
   @Post('login')
   login(@Body() dto: LoginDto) {
     return this.authService.login(dto.email, dto.password);

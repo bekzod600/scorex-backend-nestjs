@@ -6,6 +6,8 @@ import { NotificationsController } from './notifications.controller';
 import { DatabaseModule } from '../../database/database.module';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import type { EnvVars } from '../../config/env.validation';
+import { TelegramModule } from 'src/telegram/telegram.module';
+import { TelegramNotificationProvider } from './providers/telegram.provider';
 
 @Module({
   imports: [
@@ -20,8 +22,9 @@ import type { EnvVars } from '../../config/env.validation';
         },
       }),
     }),
+    TelegramModule,
   ],
-  providers: [NotificationsService, JwtAuthGuard],
+  providers: [NotificationsService, JwtAuthGuard, TelegramNotificationProvider],
   controllers: [NotificationsController],
   exports: [NotificationsService],
 })

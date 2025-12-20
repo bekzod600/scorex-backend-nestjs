@@ -32,6 +32,6 @@ import type { EnvVars } from '../../config/env.validation';
   ],
   providers: [SignalsService, SignalEngineService, JwtAuthGuard],
   controllers: [SignalsController],
-  exports: [SignalsService],
+  exports: [SignalsService, SignalEngineService],
 })
 export class SignalsModule {}
