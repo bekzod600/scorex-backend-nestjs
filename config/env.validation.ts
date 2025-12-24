@@ -17,6 +17,10 @@ export const envSchema = z.object({
   REDIS_HOST: z.string(),
   REDIS_PORT: z.coerce.number().int().min(1).max(65535),
   REDIS_PASSWORD: z.string().optional(),
+
+  // Telegram configuration
+  TELEGRAM_BOT_TOKEN: z.string(),
+  TELEGRAM_BOT_USERNAME: z.string(),
 });
 
 export type EnvVars = z.infer<typeof envSchema>;

@@ -3,12 +3,13 @@ import { JwtModule } from '@nestjs/jwt';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
-import { UsersModule } from '../users/users.module';
+import { AuthWebSocketGateway } from './auth-websocket.gateway';
+import { DatabaseModule } from '../../database/database.module';
 import type { EnvVars } from '../../config/env.validation';
 
 @Module({
   imports: [
-    UsersModule,
+    DatabaseModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
@@ -21,6 +22,7 @@ import type { EnvVars } from '../../config/env.validation';
     }),
   ],
   controllers: [AuthController],
-  providers: [AuthService],
+  providers: [AuthService, AuthWebSocketGateway],
+  exports: [AuthService],
 })
 export class AuthModule {}
