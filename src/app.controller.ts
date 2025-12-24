@@ -1,19 +1,12 @@
-// src/health/health.controller.ts
-import { Controller, Get, Inject } from '@nestjs/common';
-import { Pool } from 'pg';
+import { Controller, Get } from '@nestjs/common';
+import { AppService } from './app.service';
 
-@Controller('health')
-export class HealthController {
-  constructor(@Inject('PG_POOL') private readonly pool: Pool) {}
+@Controller()
+export class AppController {
+  constructor(private readonly appService: AppService) {}
 
   @Get()
-  async check() {
-    const result = await this.pool.query('SELECT 1');
-
-    return {
-      status: 'ok',
-      db: result.rowCount === 1 ? 'connected' : 'error',
-      timestamp: new Date().toISOString(),
-    };
+  getHello(): string {
+    return this.appService.getHello();
   }
 }
