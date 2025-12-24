@@ -4,9 +4,7 @@ import { Pool } from 'pg';
 
 @Controller('health')
 export class HealthController {
-  constructor(
-    @Inject('PG_POOL') private readonly pool: Pool,
-  ) {}
+  constructor(@Inject('PG_POOL') private readonly pool: Pool) {}
 
   @Get()
   async check() {

@@ -13,6 +13,10 @@ export const envSchema = z.object({
 
   JWT_SECRET: z.string(),
   JWT_EXPIRES_IN: z.string(),
+
+  REDIS_HOST: z.string(),
+  REDIS_PORT: z.coerce.number().int().min(1).max(65535),
+  REDIS_PASSWORD: z.string().optional(),
 });
 
 export type EnvVars = z.infer<typeof envSchema>;
