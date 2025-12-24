@@ -1,13 +1,13 @@
 import { Inject, Injectable, Optional } from '@nestjs/common';
 import { Pool } from 'pg';
 import { TelegramNotificationProvider } from './providers/telegram.provider';
-import Redis from 'ioredis';
+// import Redis from 'ioredis';
 
 @Injectable()
 export class NotificationsService {
   constructor(
     @Optional() @Inject('PG_POOL') private readonly pool: Pool,
-    @Inject('REDIS') private readonly redis: Redis,
+    // @Inject('REDIS') private readonly redis: Redis,
     private readonly telegramProvider: TelegramNotificationProvider,
   ) {}
 
@@ -20,17 +20,17 @@ export class NotificationsService {
       [userId, type, message],
     );
 
-    await this.redis.del(`notifications:unread:${userId}`);
+    // await this.redis.del(`notifications:unread:${userId}`);
     await this.telegramProvider.send(userId, message);
   }
 
   async list(userId: string) {
-    const cacheKey = `notifications:unread:${userId}`;
+    // const cacheKey = `notifications:unread:${userId}`;
 
-    const cached = await this.redis.get(cacheKey);
-    if (cached) {
-      return JSON.parse(cached);
-    }
+    // const cached = await this.redis.get(cacheKey);
+    // if (cached) {
+    //   return JSON.parse(cached);
+    // }
 
     const { rows } = await this.pool.query(
       `
@@ -41,7 +41,7 @@ export class NotificationsService {
       [userId],
     );
 
-    await this.redis.set(cacheKey, JSON.stringify(rows), 'EX', 15);
+    // await this.redis.set(cacheKey, JSON.stringify(rows), 'EX', 15);
 
     return rows;
   }
@@ -55,6 +55,6 @@ export class NotificationsService {
       `,
       [id, userId],
     );
-    await this.redis.del(`notifications:unread:${userId}`);
+    // await this.redis.del(`notifications:unread:${userId}`);
   }
 }
