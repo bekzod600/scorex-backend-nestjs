@@ -18,6 +18,10 @@ import type { EnvVars } from '../config/env.validation';
           database: config.get('DB_NAME', { infer: true }),
           user: config.get('DB_USER', { infer: true }),
           password: config.get('DB_PASSWORD', { infer: true }),
+          ssl:
+            process.env.NODE_ENV === 'production'
+              ? { rejectUnauthorized: false }
+              : false,
         }),
     },
   ],
