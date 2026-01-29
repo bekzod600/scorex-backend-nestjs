@@ -18,7 +18,7 @@ import type { EnvVars } from '../../config/env.validation';
     RatingModule,
     FiltersModule,
     NotificationsModule,
-    PricingModule,
+    PricingModule, // PricingModule'ni import qilamiz
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],

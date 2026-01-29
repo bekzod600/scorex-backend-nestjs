@@ -4,6 +4,7 @@ import {
   Get,
   Param,
   Post,
+  Query,
   Req,
   UseGuards,
 } from '@nestjs/common';
@@ -24,8 +25,13 @@ export class SignalsController {
   ) {}
 
   @Get()
-  list(@Req() req: AuthenticatedRequest) {
-    return this.signalsService.list(req?.user?.id);
+  list(
+    @Req() req: AuthenticatedRequest,
+    @Query('tab') tab?: 'live' | 'results',
+  ) {
+    // tab parameter: 'live' (default) or 'results'
+    const activeTab = tab === 'results' ? 'results' : 'live';
+    return this.signalsService.list(req?.user?.id, activeTab);
   }
 
   @UseGuards(JwtAuthGuard)

@@ -19,10 +19,26 @@ async function bootstrap() {
     .map((origin) => origin.trim())
     .filter(Boolean);
 
+  // Security check: prevent wildcard in production
+  if (nodeEnv === 'production' && allowedOrigins.includes('*')) {
+    throw new Error(
+      '🚨 SECURITY ERROR: Wildcard (*) CORS is not allowed in production! ' +
+        'Please set specific domains in CORS_ORIGINS environment variable.',
+    );
+  }
+
   console.log('📋 Allowed CORS Origins:', allowedOrigins);
 
   app.enableCors({
     origin: (origin, callback) => {
+      // Check if wildcard (*) is enabled - DEVELOPMENT ONLY!
+      if (allowedOrigins.includes('*')) {
+        console.warn(
+          '⚠️  CORS: Wildcard (*) enabled - NOT SECURE FOR PRODUCTION!',
+        );
+        return callback(null, true);
+      }
+
       // Allow requests with no origin (mobile apps, curl, Postman)
       if (!origin) {
         return callback(null, true);
@@ -36,7 +52,13 @@ async function bootstrap() {
       }
     },
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+    allowedHeaders: [
+      'Content-Type',
+      'Authorization',
+      'X-Requested-With',
+      'ngrok-skip-browser-warning', // Allow ngrok bypass header
+    ],
+    exposedHeaders: ['Content-Length', 'X-Request-Id'],
     credentials: true,
     maxAge: 86400,
     preflightContinue: false,
