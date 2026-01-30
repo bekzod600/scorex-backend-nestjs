@@ -1,9 +1,12 @@
+// src/wallet/wallet.module.ts
+// TUZATILGAN - to'g'ri import path
+
 import { Module } from '@nestjs/common';
 import { JwtModule } from '@nestjs/jwt';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { WalletService } from './wallet.service';
 import { WalletController } from './wallet.controller';
-import { DatabaseModule } from 'database/database.module';
+import { DatabaseModule } from '../../database/database.module'; // TUZATILDI
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import type { EnvVars } from '../../config/env.validation';
 
@@ -14,9 +17,9 @@ import type { EnvVars } from '../../config/env.validation';
       imports: [ConfigModule],
       inject: [ConfigService],
       useFactory: (config: ConfigService<EnvVars, true>) => ({
-        secret: config.get('JWT_SECRET', { infer: true }),
+        secret: config.get('JWT_SECRET'),
         signOptions: {
-          expiresIn: config.get('JWT_EXPIRES_IN', { infer: true }),
+          expiresIn: config.get('JWT_EXPIRES_IN') || '7d',
         },
       }),
     }),

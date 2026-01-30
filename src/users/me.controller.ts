@@ -11,6 +11,10 @@ import {
 export class MeController {
   constructor(private readonly signalsService: SignalsService) {}
 
+  /**
+   * GET /me/signals
+   * Get current user's signals
+   */
   @Get('signals')
   async getMySignals(
     @Req() req: AuthenticatedRequest,

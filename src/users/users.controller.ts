@@ -6,6 +6,10 @@ import { UsersService } from './users.service';
 export class UsersController {
   constructor(private readonly usersService: UsersService) {}
 
+  /**
+   * GET /users/:id
+   * Get user by ID (public profile)
+   */
   @Get(':id')
   async findById(@Param('id') id: string) {
     return this.usersService.findById(id);

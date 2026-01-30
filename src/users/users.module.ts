@@ -13,7 +13,7 @@ import type { EnvVars } from '../../config/env.validation';
 @Module({
   imports: [
     DatabaseModule,
-    forwardRef(() => SignalsModule),
+    forwardRef(() => SignalsModule), // Circular dependency oldini olish
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
