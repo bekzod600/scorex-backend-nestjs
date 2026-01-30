@@ -45,4 +45,38 @@ export class UsersService {
     );
     return rows[0];
   }
+
+  /**
+   * Get user's own signals
+   */
+  async getMySignals(userId: string, params?: { tab?: 'live' | 'results' }) {
+    const tab = params?.tab || 'live';
+
+    let statusFilter = '';
+    if (tab === 'live') {
+      statusFilter = `AND s.status IN ('WAIT_EP', 'IN_TRADE')`;
+    } else if (tab === 'results') {
+      statusFilter = `AND s.status IN ('CLOSED_TP', 'CLOSED_SL', 'CANCELED')`;
+    }
+
+    const { rows } = await this.pool.query(
+      `
+      SELECT s.*
+      FROM signals s
+      WHERE s.seller_id = $1
+      ${statusFilter}
+      ORDER BY s.created_at DESC
+      `,
+      [userId],
+    );
+
+    return {
+      signals: rows.map((s) => ({
+        ...s,
+        isLocked: false,
+        isPurchased: true,
+      })),
+      total: rows.length,
+    };
+  }
 }

@@ -1,3 +1,6 @@
+// src/signals/signals.controller.ts
+// YANGILANGAN VERSIYA - GET /:id va /me/signals qo'shilgan
+
 import {
   Body,
   Controller,
@@ -13,6 +16,7 @@ import { SignalsService } from './signals.service';
 import { CreateSignalDto } from './dto/create-signal.dto';
 import {
   JwtAuthGuard,
+  OptionalJwtAuthGuard,
   type AuthenticatedRequest,
 } from '../common/guards/jwt-auth.guard';
 import { SignalEngineService } from './engine/signal-engine.service';
@@ -24,16 +28,42 @@ export class SignalsController {
     private readonly engine: SignalEngineService,
   ) {}
 
+  /**
+   * GET /signals
+   * List all signals with optional tab filter
+   */
   @Get()
+  @UseGuards(OptionalJwtAuthGuard)
   list(
     @Req() req: AuthenticatedRequest,
     @Query('tab') tab?: 'live' | 'results',
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
   ) {
-    // tab parameter: 'live' (default) or 'results'
-    const activeTab = tab === 'results' ? 'results' : 'live';
-    return this.signalsService.list(req?.user?.id, activeTab);
+    return this.signalsService.list(req?.user?.id, {
+      tab,
+      page: page ? parseInt(page, 10) : 1,
+      limit: limit ? parseInt(limit, 10) : 20,
+    });
   }
 
+  /**
+   * GET /signals/:id
+   * Get single signal by ID
+   */
+  @Get(':id')
+  @UseGuards(OptionalJwtAuthGuard)
+  async getById(
+    @Param('id') id: string,
+    @Req() req: AuthenticatedRequest,
+  ) {
+    return this.signalsService.findByIdWithAccess(id, req?.user?.id);
+  }
+
+  /**
+   * POST /signals
+   * Create new signal (requires auth)
+   */
   @UseGuards(JwtAuthGuard)
   @Post()
   create(@Req() req: AuthenticatedRequest, @Body() dto: CreateSignalDto) {

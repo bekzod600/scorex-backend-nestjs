@@ -1,10 +1,17 @@
-import { Inject, Injectable, BadRequestException } from '@nestjs/common';
+// src/signals/signals.service.ts
+// YANGILANGAN VERSIYA - tab filter va findByIdWithAccess qo'shilgan
+
+import {
+  Inject,
+  Injectable,
+  BadRequestException,
+  NotFoundException,
+} from '@nestjs/common';
 import { Pool } from 'pg';
 import { CreateSignalDto } from './dto/create-signal.dto';
 import { SignalStatus } from './constants/signal.constants';
 import { FilterMatcherService } from 'src/filters/filter-matcher.service';
 import { ActiveSymbolsService } from 'src/pricing/active-symbols.service';
-import { PricingService } from 'src/pricing/pricing.service';
 
 @Injectable()
 export class SignalsService {
@@ -12,7 +19,6 @@ export class SignalsService {
     @Inject('PG_POOL') private readonly pool: Pool,
     private readonly filterMatcher: FilterMatcherService,
     private readonly activeSymbols: ActiveSymbolsService,
-    private readonly pricingService: PricingService,
   ) {}
 
   async create(userId: string, dto: CreateSignalDto) {
@@ -46,104 +52,98 @@ export class SignalsService {
     return rows[0];
   }
 
-  async list(viewerId?: string, tab: 'live' | 'results' = 'live') {
-    // Determine status filter based on tab
-    const statusFilter =
-      tab === 'live'
-        ? `s.status IN ('WAIT_EP', 'IN_TRADE')`
-        : `s.status IN ('CLOSED_TP', 'CLOSED_SL', 'CANCELED')`;
+  /**
+   * List signals with optional tab filter and pagination
+   */
+  async list(
+    viewerId?: string,
+    params?: {
+      tab?: 'live' | 'results';
+      page?: number;
+      limit?: number;
+    },
+  ) {
+    const tab = params?.tab || 'live';
+    const page = params?.page || 1;
+    const limit = Math.min(params?.limit || 20, 100);
+    const offset = (page - 1) * limit;
+
+    // Build status filter based on tab
+    let statusFilter = '';
+    if (tab === 'live') {
+      statusFilter = `WHERE s.status IN ('WAIT_EP', 'IN_TRADE')`;
+    } else if (tab === 'results') {
+      statusFilter = `WHERE s.status IN ('CLOSED_TP', 'CLOSED_SL', 'CANCELED')`;
+    }
 
     const { rows } = await this.pool.query(
       `
       SELECT 
         s.*,
-        u.id as seller_id,
-        u.email as seller_email,
-        u.name as seller_name,
-        u.score_x as seller_scorex,
-        u.telegram_username as seller_telegram,
+        u.telegram_username as trader_username,
+        u.telegram_first_name as trader_display_name,
+        u.avatar as trader_avatar,
+        u.score_x as trader_score_x,
         EXISTS(
           SELECT 1 FROM signal_purchases p
           WHERE p.signal_id = s.id AND p.user_id = $1
-        ) AS is_purchased,
-        (
-          SELECT COUNT(*) FROM signal_purchases p2
-          WHERE p2.signal_id = s.id
-        ) AS purchase_count
+        ) AS is_purchased
       FROM signals s
-      LEFT JOIN users u ON s.seller_id = u.id
-      WHERE ${statusFilter}
+      LEFT JOIN users u ON u.id = s.seller_id
+      ${statusFilter}
       ORDER BY s.created_at DESC
+      LIMIT $2 OFFSET $3
       `,
-      [viewerId ?? null],
+      [viewerId ?? null, limit, offset],
     );
 
-    // Map signals to frontend format
-    const signals = await Promise.all(
-      rows.map(async (s) => {
-        const isFree = s.access_type === 'FREE';
-        const isPurchased = Boolean(s.is_purchased);
-        const isLocked = !isFree && !isPurchased;
-
-        // Get current price if ticker is available
-        let currentPrice = 0;
-        if (!isLocked && s.ticker) {
-          try {
-            const priceData = await this.pricingService.getPrice(s.ticker);
-            currentPrice = priceData.price;
-          } catch (err) {
-            console.log(err);
-            // Ignore price fetch errors
-            currentPrice = 0;
-          }
-        }
-
-        return {
-          id: s.id,
-          ticker: isLocked ? null : s.ticker,
-          entry: isLocked ? null : Number(s.ep),
-          tp1: isLocked ? null : Number(s.tp1),
-          tp2: isLocked ? null : s.tp2 ? Number(s.tp2) : null,
-          sl: isLocked ? null : Number(s.sl),
-          currentPrice,
-          status: this.mapStatus(s.status),
-          isFree,
-          price: Number(s.price) || 0,
-          discountPercent: 0, // TODO: implement discount logic
-          islamiclyStatus: this.mapComplianceStatus(s.islamicly_status),
-          musaffaStatus: this.mapComplianceStatus(s.musaffa_status),
-          trader: {
-            id: s.seller_id,
-            username:
-              s.seller_telegram ||
-              s.seller_name ||
-              s.seller_email?.split('@')[0] ||
-              'Trader',
-            avatar: '', // TODO: implement avatar logic
-            scoreXPoints: Number(s.seller_scorex) || 1000,
-            rank: 0, // TODO: calculate rank
-            avgStars: 0, // TODO: calculate from ratings
-            totalPLPercent: 0, // TODO: calculate from closed signals
-            totalSignals: 0, // TODO: count seller's signals
-            subscribers: Number(s.purchase_count) || 0,
-            avgDaysToResult: 0, // TODO: calculate average
-          },
-          likes: 0, // TODO: implement likes system
-          dislikes: 0, // TODO: implement dislikes system
-          createdAt: s.created_at,
-          closedAt: s.closed_at || null,
-          isLocked,
-          isPurchased,
-        };
-      }),
+    // Get total count
+    const { rows: countRows } = await this.pool.query(
+      `
+      SELECT COUNT(*) as total
+      FROM signals s
+      ${statusFilter}
+      `,
     );
+
+    const signals = rows.map((s) => this.formatSignalResponse(s));
 
     return {
       signals,
-      total: signals.length,
-      page: 1,
-      limit: 100,
+      total: Number(countRows[0]?.total || 0),
+      page,
+      limit,
     };
+  }
+
+  /**
+   * Find signal by ID with purchase access check
+   */
+  async findByIdWithAccess(id: string, viewerId?: string) {
+    const { rows } = await this.pool.query(
+      `
+      SELECT 
+        s.*,
+        u.telegram_username as trader_username,
+        u.telegram_first_name as trader_display_name,
+        u.avatar as trader_avatar,
+        u.score_x as trader_score_x,
+        EXISTS(
+          SELECT 1 FROM signal_purchases p
+          WHERE p.signal_id = s.id AND p.user_id = $2
+        ) AS is_purchased
+      FROM signals s
+      LEFT JOIN users u ON u.id = s.seller_id
+      WHERE s.id = $1
+      `,
+      [id, viewerId ?? null],
+    );
+
+    if (!rows[0]) {
+      throw new NotFoundException('Signal not found');
+    }
+
+    return this.formatSignalResponse(rows[0]);
   }
 
   async findById(id: string) {
@@ -171,30 +171,108 @@ export class SignalsService {
     if (!rows[0]) {
       throw new BadRequestException('Signal not found');
     }
-
     return rows[0];
   }
 
-  // Helper method to map backend status to frontend status
+  /**
+   * Get user's own signals
+   */
+  async getMySignals(
+    userId: string,
+    params?: { tab?: 'live' | 'results' },
+  ) {
+    const tab = params?.tab || 'live';
+
+    let statusFilter = '';
+    if (tab === 'live') {
+      statusFilter = `AND s.status IN ('WAIT_EP', 'IN_TRADE')`;
+    } else if (tab === 'results') {
+      statusFilter = `AND s.status IN ('CLOSED_TP', 'CLOSED_SL', 'CANCELED')`;
+    }
+
+    const { rows } = await this.pool.query(
+      `
+      SELECT 
+        s.*,
+        u.telegram_username as trader_username,
+        u.telegram_first_name as trader_display_name,
+        u.avatar as trader_avatar,
+        u.score_x as trader_score_x,
+        TRUE AS is_purchased
+      FROM signals s
+      LEFT JOIN users u ON u.id = s.seller_id
+      WHERE s.seller_id = $1
+      ${statusFilter}
+      ORDER BY s.created_at DESC
+      `,
+      [userId],
+    );
+
+    return {
+      signals: rows.map((s) => this.formatSignalResponse(s)),
+      total: rows.length,
+    };
+  }
+
+  /**
+   * Format signal response for frontend
+   */
+  private formatSignalResponse(row: any) {
+    const isPaid = row.access_type === 'PAID';
+    const isPurchased = row.is_purchased === true;
+    const isLocked = isPaid && !isPurchased;
+
+    return {
+      id: row.id,
+      ticker: isLocked ? '********' : row.ticker,
+      direction: row.direction || 'BUY',
+      entry: isLocked ? null : Number(row.ep),
+      ep: isLocked ? null : Number(row.ep),
+      tp1: isLocked ? null : Number(row.tp1),
+      tp2: row.tp2 ? (isLocked ? null : Number(row.tp2)) : null,
+      sl: isLocked ? null : Number(row.sl),
+      currentPrice: null, // TODO: fetch from price_cache
+      status: this.mapStatus(row.status),
+      accessType: row.access_type,
+      isFree: row.access_type === 'FREE',
+      price: Number(row.price) || 0,
+      discountPercent: 0,
+      islamiclyStatus: row.islamicly_status,
+      musaffaStatus: row.musaffa_status,
+      isLocked,
+      isPurchased,
+      likes: 0,
+      dislikes: 0,
+      createdAt: row.created_at,
+      closedAt: row.closed_at,
+      enteredAt: row.entered_at,
+      trader: {
+        id: row.seller_id,
+        username: row.trader_username || 'Unknown',
+        displayName: row.trader_display_name,
+        avatar: row.trader_avatar,
+        scoreXPoints: Number(row.trader_score_x) || 1000,
+        rank: 0,
+        avgStars: 0,
+        totalPLPercent: 0,
+        totalSignals: 0,
+        subscribers: 0,
+        avgDaysToResult: 0,
+      },
+    };
+  }
+
+  /**
+   * Map backend status to frontend status
+   */
   private mapStatus(status: string): string {
     const statusMap: Record<string, string> = {
       WAIT_EP: 'WAITING_ENTRY',
       IN_TRADE: 'ACTIVE',
-      CLOSED_TP: 'TP1_HIT', // or TP2_HIT based on which TP was hit
+      CLOSED_TP: 'TP1_HIT',
       CLOSED_SL: 'SL_HIT',
       CANCELED: 'CANCEL',
     };
-    return statusMap[status] || 'WAITING_ENTRY';
-  }
-
-  // Helper method to map compliance status
-  private mapComplianceStatus(
-    status: string | null,
-  ): 'COMPLIANT' | 'NON_COMPLIANT' | 'NOT_COVERED' {
-    if (!status) return 'NOT_COVERED';
-    const normalized = status.toUpperCase();
-    if (normalized === 'COMPLIANT') return 'COMPLIANT';
-    if (normalized === 'NON_COMPLIANT') return 'NON_COMPLIANT';
-    return 'NOT_COVERED';
+    return statusMap[status] || status;
   }
 }

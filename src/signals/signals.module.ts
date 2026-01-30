@@ -1,4 +1,7 @@
-import { Module } from '@nestjs/common';
+// src/signals/signals.module.ts
+// YANGILANGAN - OptionalJwtAuthGuard qo'shilgan
+
+import { Module, forwardRef } from '@nestjs/common';
 import { JwtModule } from '@nestjs/jwt';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { SignalsService } from './signals.service';
@@ -9,16 +12,16 @@ import { FiltersModule } from 'src/filters/filters.module';
 import { NotificationsModule } from 'src/notifications/notifications.module';
 import { PricingModule } from 'src/pricing/pricing.module';
 import { SignalEngineService } from './engine/signal-engine.service';
-import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { JwtAuthGuard, OptionalJwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import type { EnvVars } from '../../config/env.validation';
 
 @Module({
   imports: [
     DatabaseModule,
-    RatingModule,
+    forwardRef(() => RatingModule),
     FiltersModule,
     NotificationsModule,
-    PricingModule, // PricingModule'ni import qilamiz
+    PricingModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
@@ -30,7 +33,7 @@ import type { EnvVars } from '../../config/env.validation';
       }),
     }),
   ],
-  providers: [SignalsService, SignalEngineService, JwtAuthGuard],
+  providers: [SignalsService, SignalEngineService, JwtAuthGuard, OptionalJwtAuthGuard],
   controllers: [SignalsController],
   exports: [SignalsService, SignalEngineService],
 })
