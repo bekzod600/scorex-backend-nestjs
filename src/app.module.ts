@@ -17,6 +17,8 @@ import { FiltersModule } from './filters/filters.module';
 import { PricingModule } from './pricing/pricing.module';
 import { AdminModule } from './admin/admin.module';
 import { TradersModule } from './traders/traders.module'; // YANGI
+import { SubscriptionsModule } from './subscriptions/subscriptions.module';
+import { FavoritesModule } from './favorites/favorites.module';
 
 import { WinstonModule } from 'nest-winston';
 import { winstonConfig } from './common/logger/winston.config';
@@ -51,6 +53,8 @@ import { JobsModule } from './jobs/jobs.module';
     TelegramModule,
     JobsModule,
     TradersModule, // YANGI
+    SubscriptionsModule,
+    FavoritesModule,
   ],
   providers: [
     {

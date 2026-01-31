@@ -177,10 +177,7 @@ export class SignalsService {
   /**
    * Get user's own signals
    */
-  async getMySignals(
-    userId: string,
-    params?: { tab?: 'live' | 'results' },
-  ) {
+  async getMySignals(userId: string, params?: { tab?: 'live' | 'results' }) {
     const tab = params?.tab || 'live';
 
     let statusFilter = '';
