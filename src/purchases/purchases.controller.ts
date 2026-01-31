@@ -1,4 +1,4 @@
-import { Controller, Param, Post, Req, UseGuards } from '@nestjs/common';
+import { Controller, Param, ParseUUIDPipe, Post, Req, UseGuards } from '@nestjs/common';
 import { PurchasesService } from './purchases.service';
 import {
   JwtAuthGuard,
@@ -11,7 +11,7 @@ export class PurchasesController {
   constructor(private readonly purchasesService: PurchasesService) {}
 
   @Post(':id/buy')
-  buy(@Req() req: AuthenticatedRequest, @Param('id') id: string) {
+  buy(@Req() req: AuthenticatedRequest, @Param('id', ParseUUIDPipe) id: string) {
     return this.purchasesService.buySignal(req.user.id, id);
   }
 }

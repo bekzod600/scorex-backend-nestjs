@@ -22,14 +22,14 @@ export class WalletService {
 
   async getWallet(userId: string) {
     const { rows } = await this.pool.query(
-      `SELECT balance, currency FROM wallets WHERE user_id = $1`,
+      `SELECT balance FROM wallets WHERE user_id = $1`,
       [userId],
     );
 
     if (!rows[0]) {
       // Wallet yo'q bo'lsa, yaratamiz
       await this.pool.query(
-        `INSERT INTO wallets (user_id, balance, currency) VALUES ($1, 0, 'USD')`,
+        `INSERT INTO wallets (user_id, balance) VALUES ($1, 0)`,
         [userId],
       );
       return { balance: 0, currency: 'USD' };
@@ -37,7 +37,7 @@ export class WalletService {
 
     return {
       balance: Number(rows[0].balance),
-      currency: rows[0].currency,
+      currency: 'USD', // Default currency
     };
   }
 
@@ -52,8 +52,8 @@ export class WalletService {
       // Ensure wallet exists
       await this.pool.query(
         `
-        INSERT INTO wallets (user_id, balance, currency) 
-        VALUES ($1, 0, 'USD')
+        INSERT INTO wallets (user_id, balance) 
+        VALUES ($1, 0)
         ON CONFLICT (user_id) DO NOTHING
         `,
         [userId],
@@ -130,7 +130,7 @@ export class WalletService {
   async getTransactions(userId: string): Promise<{ transactions: WalletTransaction[] }> {
     const { rows } = await this.pool.query(
       `
-      SELECT id, type, amount, status, provider, meta, created_at
+      SELECT id, type, amount, status, created_at
       FROM wallet_transactions
       WHERE user_id = $1
       ORDER BY created_at DESC
@@ -146,7 +146,7 @@ export class WalletService {
       fee: 0, // TODO: implement fee tracking
       creditedAmount: Math.abs(Number(row.amount)),
       status: this.mapStatus(row.status),
-      description: this.getDescription(row.type, row.meta),
+      description: this.getDescription(row.type, undefined),
       createdAt: row.created_at,
     }));
 

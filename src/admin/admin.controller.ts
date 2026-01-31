@@ -1,4 +1,12 @@
-import { Controller, Get, Param, Post, Body, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Param,
+  ParseUUIDPipe,
+  Post,
+  Body,
+  UseGuards,
+} from '@nestjs/common';
 import { AdminService } from './admin.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -23,12 +31,12 @@ export class AdminController {
   }
 
   @Post('training-centers/:id/approve')
-  approveCenter(@Param('id') id: string) {
+  approveCenter(@Param('id', ParseUUIDPipe) id: string) {
     return this.admin.approveTrainingCenter(id);
   }
 
   @Post('training-centers/:id/reject')
-  rejectCenter(@Param('id') id: string) {
+  rejectCenter(@Param('id', ParseUUIDPipe) id: string) {
     return this.admin.rejectTrainingCenter(id);
   }
 
@@ -39,18 +47,21 @@ export class AdminController {
   }
 
   @Post('p2p-topups/:id/approve')
-  approveP2p(@Param('id') id: string) {
+  approveP2p(@Param('id', ParseUUIDPipe) id: string) {
     return this.admin.approveP2pTopup(id);
   }
 
   @Post('p2p-topups/:id/reject')
-  rejectP2p(@Param('id') id: string, @Body('note') note?: string) {
+  rejectP2p(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body('note') note?: string,
+  ) {
     return this.admin.rejectP2pTopup(id, note);
   }
 
   // SIGNALS
   @Post('signals/:id/force-cancel')
-  forceCancel(@Param('id') id: string) {
+  forceCancel(@Param('id', ParseUUIDPipe) id: string) {
     return this.admin.forceCancelSignal(id);
   }
 }

@@ -3,6 +3,7 @@ import {
   Controller,
   Delete,
   Param,
+  ParseUUIDPipe,
   Post,
   Req,
   UseGuards,
@@ -28,7 +29,7 @@ export class FavoritesController {
   @HttpCode(HttpStatus.OK)
   async addFavorite(
     @Req() req: AuthenticatedRequest,
-    @Param('id') signalId: string,
+    @Param('id', ParseUUIDPipe) signalId: string,
   ) {
     await this.favoritesService.addFavorite(req.user.id, signalId);
     return { success: true, message: 'Signal added to favorites' };
@@ -43,7 +44,7 @@ export class FavoritesController {
   @HttpCode(HttpStatus.OK)
   async removeFavorite(
     @Req() req: AuthenticatedRequest,
-    @Param('id') signalId: string,
+    @Param('id', ParseUUIDPipe) signalId: string,
   ) {
     await this.favoritesService.removeFavorite(req.user.id, signalId);
     return { success: true, message: 'Signal removed from favorites' };

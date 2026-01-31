@@ -4,6 +4,7 @@ import {
   Controller,
   Get,
   Param,
+  ParseUUIDPipe,
   Post,
   Req,
   UseGuards,
@@ -56,7 +57,7 @@ export class RatingController {
   @Post('signals/:id/vote')
   async voteSignal(
     @Req() req: AuthenticatedRequest,
-    @Param('id') signalId: string,
+    @Param('id', ParseUUIDPipe) signalId: string,
     @Body() dto: VoteSignalDto,
   ) {
     const counts = await this.ratingService.voteSignal(req.user.id, signalId, dto.vote);
@@ -75,7 +76,7 @@ export class RatingController {
   @Get('signals/:id/my-vote')
   async getMySignalVote(
     @Req() req: AuthenticatedRequest,
-    @Param('id') signalId: string,
+    @Param('id', ParseUUIDPipe) signalId: string,
   ) {
     return this.ratingService.getMySignalVote(req.user.id, signalId);
   }

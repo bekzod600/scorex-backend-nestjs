@@ -6,6 +6,7 @@ import {
   Controller,
   Get,
   Param,
+  ParseUUIDPipe,
   Post,
   Query,
   Req,
@@ -54,7 +55,7 @@ export class SignalsController {
   @Get(':id')
   @UseGuards(OptionalJwtAuthGuard)
   async getById(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Req() req: AuthenticatedRequest,
   ) {
     return this.signalsService.findByIdWithAccess(id, req?.user?.id);
@@ -72,22 +73,22 @@ export class SignalsController {
 
   // ENGINE ENDPOINTS (internal / admin / cron)
   @Post(':id/entered')
-  markEntered(@Param('id') id: string) {
+  markEntered(@Param('id', ParseUUIDPipe) id: string) {
     return this.engine.markEntered(id);
   }
 
   @Post(':id/tp')
-  markTp(@Param('id') id: string) {
+  markTp(@Param('id', ParseUUIDPipe) id: string) {
     return this.engine.markTp(id);
   }
 
   @Post(':id/sl')
-  markSl(@Param('id') id: string) {
+  markSl(@Param('id', ParseUUIDPipe) id: string) {
     return this.engine.markSl(id);
   }
 
   @Post(':id/cancel')
-  cancel(@Param('id') id: string) {
+  cancel(@Param('id', ParseUUIDPipe) id: string) {
     return this.engine.cancel(id);
   }
 }
