@@ -59,8 +59,12 @@ export class RatingController {
     @Param('id') signalId: string,
     @Body() dto: VoteSignalDto,
   ) {
-    await this.ratingService.voteSignal(req.user.id, signalId, dto.vote);
-    return { success: true, message: 'Vote recorded successfully' };
+    const counts = await this.ratingService.voteSignal(req.user.id, signalId, dto.vote);
+    return { 
+      success: true, 
+      likes: counts.likes,
+      dislikes: counts.dislikes 
+    };
   }
 
   /**

@@ -188,13 +188,34 @@ export class RatingService {
   }
 
   /**
+   * Get vote counts for a signal
+   */
+  async getSignalVoteCounts(signalId: string): Promise<{ likes: number; dislikes: number }> {
+    const { rows } = await this.pool.query(
+      `
+      SELECT 
+        COUNT(*) FILTER (WHERE vote = 'like') as likes,
+        COUNT(*) FILTER (WHERE vote = 'dislike') as dislikes
+      FROM signal_votes
+      WHERE signal_id = $1
+      `,
+      [signalId],
+    );
+
+    return {
+      likes: Number(rows[0]?.likes || 0),
+      dislikes: Number(rows[0]?.dislikes || 0),
+    };
+  }
+
+  /**
    * Vote on a signal (like/dislike)
    */
   async voteSignal(
     userId: string,
     signalId: string,
     vote: VoteType,
-  ): Promise<void> {
+  ): Promise<{ likes: number; dislikes: number }> {
     // Check if signal exists
     const { rows: signalRows } = await this.pool.query(
       `SELECT id FROM signals WHERE id = $1 LIMIT 1`,
@@ -235,6 +256,9 @@ export class RatingService {
         [userId, signalId, vote],
       );
     }
+
+    // Return updated counts
+    return this.getSignalVoteCounts(signalId);
   }
 
   /**
