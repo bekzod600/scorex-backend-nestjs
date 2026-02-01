@@ -1,49 +1,34 @@
 // src/traders/traders.service.ts
+// YANGILANGAN - Results tab da signallar doimo ochiq
+
 import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { Pool } from 'pg';
-
-export interface TraderProfile {
-  id: string;
-  username: string;
-  displayName: string | null;
-  avatar: string | null;
-  scoreXPoints: number;
-  rank: number;
-  totalSignals: number;
-  successfulSignals: number;
-  avgStars: number;
-  totalPLPercent: number;
-  subscribers: number;
-  avgDaysToResult: number;
-  createdAt: string;
-}
 
 @Injectable()
 export class TradersService {
   constructor(@Inject('PG_POOL') private readonly pool: Pool) {}
 
   /**
-   * Get traders leaderboard with sorting
+   * Get traders leaderboard
    */
   async list(params?: {
     sortBy?: 'scorex' | 'profit' | 'stars';
     page?: number;
     limit?: number;
-  }): Promise<{ traders: TraderProfile[]; total: number }> {
+  }) {
     const sortBy = params?.sortBy || 'scorex';
     const page = params?.page || 1;
     const limit = Math.min(params?.limit || 20, 100);
     const offset = (page - 1) * limit;
 
-    // Determine ORDER BY clause
+    // Build ORDER BY clause
     let orderBy = 'u.score_x DESC';
     if (sortBy === 'profit') {
-      orderBy = 'total_pl_percent DESC';
+      orderBy = 'COALESCE(ts.avg_profit_percent, 0) DESC';
     } else if (sortBy === 'stars') {
-      orderBy = 'avg_stars DESC';
+      orderBy = 'COALESCE(tr.avg_stars, 0) DESC';
     }
 
-    // Get traders with signal statistics
     const { rows } = await this.pool.query(
       `
       WITH trader_stats AS (
@@ -51,105 +36,12 @@ export class TradersService {
           seller_id,
           COUNT(*) as total_signals,
           COUNT(*) FILTER (WHERE status = 'CLOSED_TP') as successful_signals,
-          AVG(
-            CASE WHEN status = 'CLOSED_TP' AND ep > 0 
-            THEN ((tp1 - ep) / ep * 100) 
-            ELSE 0 END
-          ) as avg_profit_percent,
-          AVG(
-            EXTRACT(EPOCH FROM (closed_at - created_at)) / 86400
-          ) FILTER (WHERE closed_at IS NOT NULL) as avg_days
-        FROM signals
-        GROUP BY seller_id
-      ),
-      subscriber_counts AS (
-        SELECT 
-          trader_id,
-          COUNT(*) as subscribers
-        FROM subscriptions
-        GROUP BY trader_id
-      ),
-      trader_ratings AS (
-        SELECT 
-          trader_id,
-          AVG(stars) as avg_stars
-        FROM trader_stars
-        GROUP BY trader_id
-      )
-      SELECT 
-        u.id,
-        COALESCE(u.telegram_username, u.email, 'user_' || LEFT(u.id::text, 8)) as username,
-        u.telegram_first_name as display_name,
-        u.avatar,
-        u.score_x as score_x_points,
-        COALESCE(ts.total_signals, 0)::int as total_signals,
-        COALESCE(ts.successful_signals, 0)::int as successful_signals,
-        COALESCE(tr.avg_stars, 0)::numeric(3,2) as avg_stars,
-        COALESCE(ts.avg_profit_percent, 0)::numeric(5,2) as total_pl_percent,
-        COALESCE(sc.subscribers, 0)::int as subscribers,
-        COALESCE(ts.avg_days, 0)::numeric(5,2) as avg_days_to_result,
-        u.created_at,
-        ROW_NUMBER() OVER (ORDER BY ${orderBy}) as rank
-      FROM users u
-      LEFT JOIN trader_stats ts ON ts.seller_id = u.id
-      LEFT JOIN subscriber_counts sc ON sc.trader_id = u.id
-      LEFT JOIN trader_ratings tr ON tr.trader_id = u.id
-      WHERE EXISTS (SELECT 1 FROM signals s WHERE s.seller_id = u.id)
-      ORDER BY ${orderBy}
-      LIMIT $1 OFFSET $2
-      `,
-      [limit, offset],
-    );
-
-    // Get total count
-    const { rows: countRows } = await this.pool.query(
-      `
-      SELECT COUNT(DISTINCT seller_id) as total
-      FROM signals
-      `,
-    );
-
-    const traders: TraderProfile[] = rows.map((row) => ({
-      id: row.id,
-      username: row.username,
-      displayName: row.display_name,
-      avatar: row.avatar,
-      scoreXPoints: Number(row.score_x_points),
-      rank: Number(row.rank),
-      totalSignals: row.total_signals,
-      successfulSignals: row.successful_signals,
-      avgStars: Number(row.avg_stars),
-      totalPLPercent: Number(row.total_pl_percent),
-      subscribers: row.subscribers,
-      avgDaysToResult: Number(row.avg_days_to_result),
-      createdAt: row.created_at,
-    }));
-
-    return {
-      traders,
-      total: Number(countRows[0]?.total || 0),
-    };
-  }
-
-  /**
-   * Get trader profile by username
-   */
-  async findByUsername(username: string): Promise<TraderProfile> {
-    const { rows } = await this.pool.query(
-      `
-      WITH trader_stats AS (
-        SELECT 
-          seller_id,
-          COUNT(*) as total_signals,
-          COUNT(*) FILTER (WHERE status = 'CLOSED_TP') as successful_signals,
-          AVG(
-            CASE WHEN status = 'CLOSED_TP' AND ep > 0 
-            THEN ((tp1 - ep) / ep * 100) 
-            ELSE 0 END
-          ) as avg_profit_percent,
-          AVG(
-            EXTRACT(EPOCH FROM (closed_at - created_at)) / 86400
-          ) FILTER (WHERE closed_at IS NOT NULL) as avg_days
+          AVG(CASE WHEN status IN ('CLOSED_TP', 'CLOSED_SL') 
+              THEN EXTRACT(EPOCH FROM (closed_at - created_at)) / 86400 
+              ELSE NULL END) as avg_days,
+          AVG(CASE WHEN status = 'CLOSED_TP' THEN 10 
+                   WHEN status = 'CLOSED_SL' THEN -5 
+                   ELSE 0 END) as avg_profit_percent
         FROM signals
         GROUP BY seller_id
       ),
@@ -159,7 +51,100 @@ export class TradersService {
         GROUP BY trader_id
       ),
       trader_ratings AS (
-        SELECT trader_id, AVG(stars) as avg_stars
+        SELECT trader_id, AVG(stars)::numeric(3,2) as avg_stars
+        FROM trader_stars
+        GROUP BY trader_id
+      ),
+      ranked_traders AS (
+        SELECT 
+          u.id,
+          ROW_NUMBER() OVER (ORDER BY ${orderBy}) as rank
+        FROM users u
+        LEFT JOIN trader_stats ts ON ts.seller_id = u.id
+        LEFT JOIN trader_ratings tr ON tr.trader_id = u.id
+        WHERE ts.total_signals > 0
+      )
+      SELECT 
+        u.id,
+        u.telegram_username as username,
+        COALESCE(u.telegram_first_name, u.telegram_username) as display_name,
+        u.avatar,
+        u.score_x as score_x_points,
+        COALESCE(ts.total_signals, 0)::int as total_signals,
+        COALESCE(ts.successful_signals, 0)::int as successful_signals,
+        COALESCE(tr.avg_stars, 0)::numeric(3,2) as avg_stars,
+        COALESCE(ts.avg_profit_percent, 0)::numeric(5,2) as total_pl_percent,
+        COALESCE(sc.subscribers, 0)::int as subscribers,
+        COALESCE(ts.avg_days, 0)::numeric(5,2) as avg_days_to_result,
+        u.created_at,
+        COALESCE(rt.rank, 0) as rank
+      FROM users u
+      LEFT JOIN trader_stats ts ON ts.seller_id = u.id
+      LEFT JOIN subscriber_counts sc ON sc.trader_id = u.id
+      LEFT JOIN trader_ratings tr ON tr.trader_id = u.id
+      LEFT JOIN ranked_traders rt ON rt.id = u.id
+      WHERE ts.total_signals > 0
+      ORDER BY ${orderBy}
+      LIMIT $1 OFFSET $2
+      `,
+      [limit, offset],
+    );
+
+    // Get total count
+    const { rows: countRows } = await this.pool.query(
+      `
+      SELECT COUNT(DISTINCT s.seller_id) as total
+      FROM signals s
+      `,
+    );
+
+    return {
+      traders: rows.map((row) => ({
+        id: row.id,
+        username: row.username,
+        displayName: row.display_name,
+        avatar: row.avatar,
+        scoreXPoints: Number(row.score_x_points),
+        rank: Number(row.rank),
+        totalSignals: row.total_signals,
+        successfulSignals: row.successful_signals,
+        avgStars: Number(row.avg_stars),
+        totalPLPercent: Number(row.total_pl_percent),
+        subscribers: row.subscribers,
+        avgDaysToResult: Number(row.avg_days_to_result),
+        createdAt: row.created_at,
+      })),
+      total: Number(countRows[0]?.total || 0),
+    };
+  }
+
+  /**
+   * Get trader by username
+   */
+  async findByUsername(username: string) {
+    const { rows } = await this.pool.query(
+      `
+      WITH trader_stats AS (
+        SELECT 
+          seller_id,
+          COUNT(*) as total_signals,
+          COUNT(*) FILTER (WHERE status = 'CLOSED_TP') as successful_signals,
+          AVG(CASE WHEN status IN ('CLOSED_TP', 'CLOSED_SL') 
+              THEN EXTRACT(EPOCH FROM (closed_at - created_at)) / 86400 
+              ELSE NULL END) as avg_days,
+          AVG(CASE WHEN status = 'CLOSED_TP' THEN 10 
+                   WHEN status = 'CLOSED_SL' THEN -5 
+                   ELSE 0 END) as avg_profit_percent
+        FROM signals
+        GROUP BY seller_id
+      ),
+      subscriber_counts AS (
+        SELECT trader_id, COUNT(*) as subscribers
+        FROM subscriptions
+        GROUP BY trader_id
+      ),
+      trader_ratings AS (
+        SELECT trader_id, AVG(stars)::numeric(3,2) as avg_stars
         FROM trader_stars
         GROUP BY trader_id
       ),
@@ -168,12 +153,13 @@ export class TradersService {
           u.id,
           ROW_NUMBER() OVER (ORDER BY u.score_x DESC) as rank
         FROM users u
-        WHERE EXISTS (SELECT 1 FROM signals s WHERE s.seller_id = u.id)
+        LEFT JOIN trader_stats ts ON ts.seller_id = u.id
+        WHERE ts.total_signals > 0 OR u.telegram_username = $1
       )
       SELECT 
         u.id,
-        COALESCE(u.telegram_username, u.email, 'user_' || LEFT(u.id::text, 8)) as username,
-        u.telegram_first_name as display_name,
+        u.telegram_username as username,
+        COALESCE(u.telegram_first_name, u.telegram_username) as display_name,
         u.avatar,
         u.score_x as score_x_points,
         COALESCE(ts.total_signals, 0)::int as total_signals,
@@ -268,13 +254,27 @@ export class TradersService {
       [traderId],
     );
 
-    return rows.map((s) => this.formatSignal(s, false));
+    // MUHIM: tab parametrini formatSignal ga uzatamiz
+    return rows.map((s) => this.formatSignal(s, false, tab));
   }
 
   /**
    * Helper to format signal response
+   * @param row - Database row
+   * @param defaultLocked - Default locked state
+   * @param tab - Optional tab ('live' | 'results')
    */
-  private formatSignal(row: any, isLocked: boolean) {
+  private formatSignal(
+    row: any,
+    defaultLocked: boolean,
+    tab?: 'live' | 'results',
+  ) {
+    // MUHIM: Results tab yoki yopilgan status = doimo ochiq
+    const isClosedStatus = ['CLOSED_TP', 'CLOSED_SL', 'CANCELED'].includes(
+      row.status,
+    );
+    const isLocked = defaultLocked && !isClosedStatus && tab !== 'results';
+
     return {
       id: row.id,
       ticker: isLocked ? '********' : row.ticker,

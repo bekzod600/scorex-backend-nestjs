@@ -1,5 +1,5 @@
 // src/signals/signals.service.ts
-// YANGILANGAN VERSIYA - tab filter va findByIdWithAccess qo'shilgan
+// YANGILANGAN - Results tab da signallar doimo ochiq
 
 import {
   Inject,
@@ -106,7 +106,8 @@ export class SignalsService {
       `,
     );
 
-    const signals = rows.map((s) => this.formatSignalResponse(s));
+    // MUHIM: tab parametrini formatSignalResponse ga uzatamiz
+    const signals = rows.map((s) => this.formatSignalResponse(s, tab));
 
     return {
       signals,
@@ -143,7 +144,14 @@ export class SignalsService {
       throw new NotFoundException('Signal not found');
     }
 
-    return this.formatSignalResponse(rows[0]);
+    // Signal detail: yopilgan bo'lsa results sifatida format qilamiz
+    const row = rows[0];
+    const isClosedStatus = ['CLOSED_TP', 'CLOSED_SL', 'CANCELED'].includes(
+      row.status,
+    );
+    const tab = isClosedStatus ? 'results' : 'live';
+
+    return this.formatSignalResponse(row, tab);
   }
 
   async findById(id: string) {
@@ -206,18 +214,28 @@ export class SignalsService {
     );
 
     return {
-      signals: rows.map((s) => this.formatSignalResponse(s)),
+      signals: rows.map((s) => this.formatSignalResponse(s, tab)),
       total: rows.length,
     };
   }
 
   /**
    * Format signal response for frontend
+   * @param row - Database row
+   * @param tab - Optional tab parameter ('live' | 'results')
+   *              If 'results', signal is always unlocked (historical data)
    */
-  private formatSignalResponse(row: any) {
+  private formatSignalResponse(row: any, tab?: 'live' | 'results') {
     const isPaid = row.access_type === 'PAID';
     const isPurchased = row.is_purchased === true;
-    const isLocked = isPaid && !isPurchased;
+
+    // MUHIM: Results tab da signallar doimo ochiq (tarixiy ma'lumot)
+    // Yopilgan signallar (CLOSED_TP, CLOSED_SL, CANCELED) sotib olinishi shart emas
+    const isClosedStatus = ['CLOSED_TP', 'CLOSED_SL', 'CANCELED'].includes(
+      row.status,
+    );
+    const isLocked =
+      isPaid && !isPurchased && !isClosedStatus && tab !== 'results';
 
     return {
       id: row.id,
@@ -228,7 +246,7 @@ export class SignalsService {
       tp1: isLocked ? null : Number(row.tp1),
       tp2: row.tp2 ? (isLocked ? null : Number(row.tp2)) : null,
       sl: isLocked ? null : Number(row.sl),
-      currentPrice: null, // TODO: fetch from price_cache
+      currentPrice: null,
       status: this.mapStatus(row.status),
       accessType: row.access_type,
       isFree: row.access_type === 'FREE',

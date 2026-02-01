@@ -1,4 +1,6 @@
 // src/favorites/favorites.service.ts
+// YANGILANGAN - Yopilgan signallar doimo ochiq
+
 import {
   BadRequestException,
   Inject,
@@ -104,7 +106,7 @@ export class FavoritesService {
     );
 
     // Format signals using the same method as SignalsService
-    const signals = rows.map((row) => this.formatSignalResponse(row, userId));
+    const signals = rows.map((row) => this.formatSignalResponse(row));
 
     return {
       signals,
@@ -115,10 +117,15 @@ export class FavoritesService {
   /**
    * Format signal response for frontend (similar to SignalsService)
    */
-  private formatSignalResponse(row: any, userId: string) {
+  private formatSignalResponse(row: any) {
     const isPaid = row.access_type === 'PAID';
     const isPurchased = row.is_purchased === true;
-    const isLocked = isPaid && !isPurchased;
+
+    // MUHIM: Yopilgan signallar doimo ochiq (tarixiy ma'lumot)
+    const isClosedStatus = ['CLOSED_TP', 'CLOSED_SL', 'CANCELED'].includes(
+      row.status,
+    );
+    const isLocked = isPaid && !isPurchased && !isClosedStatus;
 
     return {
       id: row.id,
@@ -129,7 +136,7 @@ export class FavoritesService {
       tp1: isLocked ? null : Number(row.tp1),
       tp2: row.tp2 ? (isLocked ? null : Number(row.tp2)) : null,
       sl: isLocked ? null : Number(row.sl),
-      currentPrice: null, // TODO: fetch from price_cache
+      currentPrice: null,
       status: this.mapStatus(row.status),
       accessType: row.access_type,
       isFree: row.access_type === 'FREE',
@@ -175,4 +182,3 @@ export class FavoritesService {
     return statusMap[status] || status;
   }
 }
-
