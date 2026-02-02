@@ -19,6 +19,7 @@ import { AdminModule } from './admin/admin.module';
 import { TradersModule } from './traders/traders.module'; // YANGI
 import { SubscriptionsModule } from './subscriptions/subscriptions.module';
 import { FavoritesModule } from './favorites/favorites.module';
+import { SubscriptionModule } from './subscription/subscription.module';
 
 import { WinstonModule } from 'nest-winston';
 import { winstonConfig } from './common/logger/winston.config';
@@ -55,6 +56,7 @@ import { JobsModule } from './jobs/jobs.module';
     TradersModule, // YANGI
     SubscriptionsModule,
     FavoritesModule,
+    SubscriptionModule,
   ],
   providers: [
     {

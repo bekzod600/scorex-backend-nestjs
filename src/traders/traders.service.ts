@@ -1,5 +1,5 @@
 // src/traders/traders.service.ts
-// YANGILANGAN - Results tab da signallar doimo ochiq
+// TUZATILGAN - potentialProfit, potentialLoss, riskRatio BARCHA signallarda
 
 import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { Pool } from 'pg';
@@ -8,9 +8,6 @@ import { Pool } from 'pg';
 export class TradersService {
   constructor(@Inject('PG_POOL') private readonly pool: Pool) {}
 
-  /**
-   * Get traders leaderboard
-   */
   async list(params?: {
     sortBy?: 'scorex' | 'profit' | 'stars';
     page?: number;
@@ -21,7 +18,6 @@ export class TradersService {
     const limit = Math.min(params?.limit || 20, 100);
     const offset = (page - 1) * limit;
 
-    // Build ORDER BY clause
     let orderBy = 'u.score_x DESC';
     if (sortBy === 'profit') {
       orderBy = 'COALESCE(ts.avg_profit_percent, 0) DESC';
@@ -90,12 +86,8 @@ export class TradersService {
       [limit, offset],
     );
 
-    // Get total count
     const { rows: countRows } = await this.pool.query(
-      `
-      SELECT COUNT(DISTINCT s.seller_id) as total
-      FROM signals s
-      `,
+      `SELECT COUNT(DISTINCT s.seller_id) as total FROM signals s`,
     );
 
     return {
@@ -118,9 +110,6 @@ export class TradersService {
     };
   }
 
-  /**
-   * Get trader by username
-   */
   async findByUsername(username: string) {
     const { rows } = await this.pool.query(
       `
@@ -149,9 +138,7 @@ export class TradersService {
         GROUP BY trader_id
       ),
       ranked_traders AS (
-        SELECT 
-          u.id,
-          ROW_NUMBER() OVER (ORDER BY u.score_x DESC) as rank
+        SELECT u.id, ROW_NUMBER() OVER (ORDER BY u.score_x DESC) as rank
         FROM users u
         LEFT JOIN trader_stats ts ON ts.seller_id = u.id
         WHERE ts.total_signals > 0 OR u.telegram_username = $1
@@ -205,20 +192,14 @@ export class TradersService {
     };
   }
 
-  /**
-   * Get signals by trader username
-   */
   async getSignalsByUsername(
     username: string,
     params?: { tab?: 'live' | 'results' },
   ) {
-    // First, get trader ID
     const { rows: userRows } = await this.pool.query(
-      `
-      SELECT id FROM users 
-      WHERE telegram_username = $1 OR email = $1 OR id::text = $1
-      LIMIT 1
-      `,
+      `SELECT id FROM users 
+       WHERE telegram_username = $1 OR email = $1 OR id::text = $1
+       LIMIT 1`,
       [username],
     );
 
@@ -229,7 +210,6 @@ export class TradersService {
     const traderId = userRows[0].id;
     const tab = params?.tab || 'live';
 
-    // Build status filter
     let statusFilter = '';
     if (tab === 'live') {
       statusFilter = `AND s.status IN ('WAIT_EP', 'IN_TRADE')`;
@@ -254,36 +234,59 @@ export class TradersService {
       [traderId],
     );
 
-    // MUHIM: tab parametrini formatSignal ga uzatamiz
-    return rows.map((s) => this.formatSignal(s, false, tab));
+    return rows.map((s) => this.formatSignal(s, tab));
   }
 
-  /**
-   * Helper to format signal response
-   * @param row - Database row
-   * @param defaultLocked - Default locked state
-   * @param tab - Optional tab ('live' | 'results')
-   */
-  private formatSignal(
-    row: any,
-    defaultLocked: boolean,
-    tab?: 'live' | 'results',
-  ) {
-    // MUHIM: Results tab yoki yopilgan status = doimo ochiq
+  // ============================================
+  // Hisoblash metodlari
+  // ============================================
+
+  private calculatePotentialProfit(ep: number, tp1: number): number {
+    if (!ep || ep <= 0 || !tp1) return 0;
+    return Number((((tp1 - ep) / ep) * 100).toFixed(2));
+  }
+
+  private calculatePotentialLoss(ep: number, sl: number): number {
+    if (!ep || ep <= 0 || !sl) return 0;
+    return Number((((ep - sl) / ep) * 100).toFixed(2));
+  }
+
+  private calculateRiskRatio(ep: number, tp1: number, sl: number): number {
+    if (!ep || !tp1 || !sl) return 0;
+    const reward = tp1 - ep;
+    const risk = ep - sl;
+    if (risk <= 0) return 0;
+    return Number((reward / risk).toFixed(2));
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  private formatSignal(row: any, tab?: 'live' | 'results') {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const isClosedStatus = ['CLOSED_TP', 'CLOSED_SL', 'CANCELED'].includes(
       row.status,
     );
-    const isLocked = defaultLocked && !isClosedStatus && tab !== 'results';
+    // Trader profilida signallar ochiq (o'z signallari yoki results tab)
+    const isLocked = false;
+
+    const ep = Number(row.ep) || 0;
+    const tp1 = Number(row.tp1) || 0;
+    const tp2 = row.tp2 ? Number(row.tp2) : null;
+    const sl = Number(row.sl) || 0;
+
+    // ✅ BARCHA signallarda hisoblanadi
+    const potentialProfit = this.calculatePotentialProfit(ep, tp1);
+    const potentialLoss = this.calculatePotentialLoss(ep, sl);
+    const riskRatio = this.calculateRiskRatio(ep, tp1, sl);
 
     return {
       id: row.id,
-      ticker: isLocked ? '********' : row.ticker,
+      ticker: row.ticker,
       direction: row.direction,
-      entry: isLocked ? null : Number(row.ep),
-      ep: isLocked ? null : Number(row.ep),
-      tp1: isLocked ? null : Number(row.tp1),
-      tp2: row.tp2 ? Number(row.tp2) : null,
-      sl: isLocked ? null : Number(row.sl),
+      entry: ep,
+      ep: ep,
+      tp1: tp1,
+      tp2: tp2,
+      sl: sl,
       status: this.mapStatus(row.status),
       accessType: row.access_type,
       isFree: row.access_type === 'FREE',
@@ -291,7 +294,13 @@ export class TradersService {
       islamiclyStatus: row.islamicly_status,
       musaffaStatus: row.musaffa_status,
       isLocked,
-      isPurchased: !isLocked,
+      isPurchased: true,
+
+      // ✅ BARCHA signallarda qaytariladi
+      potentialProfit,
+      potentialLoss,
+      riskRatio,
+
       createdAt: row.created_at,
       closedAt: row.closed_at,
       enteredAt: row.entered_at,
@@ -305,9 +314,6 @@ export class TradersService {
     };
   }
 
-  /**
-   * Map backend status to frontend status
-   */
   private mapStatus(status: string): string {
     const statusMap: Record<string, string> = {
       WAIT_EP: 'WAITING_ENTRY',

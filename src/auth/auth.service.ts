@@ -201,6 +201,80 @@ export class AuthService {
     return { status: login.status };
   }
 
+  /**
+   * Get current user info INCLUDING subscription status
+   * GET /auth/me endpoint
+   */
+  async me(userId: string) {
+    const { rows } = await this.pool.query(
+      `
+      SELECT 
+        u.id,
+        u.telegram_id,
+        u.telegram_username,
+        u.telegram_first_name,
+        u.telegram_last_name,
+        u.avatar,
+        u.role,
+        u.score_x,
+        u.subscription_plan,
+        u.subscription_expires_at,
+        u.subscription_auto_renew,
+        u.created_at,
+        COALESCE(w.balance, 0) as balance
+      FROM users u
+      LEFT JOIN wallets w ON w.user_id = u.id
+      WHERE u.id = $1
+      `,
+      [userId],
+    );
+
+    if (!rows[0]) {
+      throw new UnauthorizedException('User not found');
+    }
+
+    const user = rows[0];
+    const now = new Date();
+    const expiresAt = user.subscription_expires_at
+      ? new Date(user.subscription_expires_at)
+      : null;
+
+    // Admin always has premium access
+    const isAdmin = user.role === 'admin';
+    const hasPremium =
+      isAdmin ||
+      (user.subscription_plan === 'premium' && expiresAt && expiresAt > now);
+
+    const daysRemaining =
+      hasPremium && expiresAt && !isAdmin
+        ? Math.ceil(
+            (expiresAt.getTime() - now.getTime()) / (1000 * 60 * 60 * 24),
+          )
+        : null;
+
+    return {
+      user: {
+        id: user.id,
+        telegramId: user.telegram_id,
+        username: user.telegram_username,
+        displayName: user.telegram_first_name,
+        avatar: user.avatar,
+        role: user.role,
+        scoreXPoints: Number(user.score_x),
+        balance: Number(user.balance),
+        createdAt: user.created_at,
+      },
+      // Subscription ma'lumotlari
+      subscription: {
+        plan: isAdmin ? 'premium' : user.subscription_plan || 'free',
+        expiresAt: isAdmin ? null : user.subscription_expires_at,
+        autoRenew: user.subscription_auto_renew || false,
+        isActive: hasPremium,
+        daysRemaining: isAdmin ? null : daysRemaining,
+      },
+    };
+  }
+
   // ========== HELPER METHODS ==========
 
   private async findUserByTelegramId(telegramId: number) {

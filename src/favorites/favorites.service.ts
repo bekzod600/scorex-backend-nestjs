@@ -1,5 +1,5 @@
 // src/favorites/favorites.service.ts
-// YANGILANGAN - Yopilgan signallar doimo ochiq
+// YANGILANGAN - Subscription-based locking logic
 
 import {
   BadRequestException,
@@ -17,23 +17,15 @@ export class FavoritesService {
     private readonly signalsService: SignalsService,
   ) {}
 
-  /**
-   * Add signal to favorites
-   */
   async addFavorite(userId: string, signalId: string): Promise<void> {
-    // Check if signal exists
     const signal = await this.signalsService.findById(signalId);
     if (!signal) {
       throw new NotFoundException('Signal not found');
     }
 
-    // Check if already favorited
     const { rows: existing } = await this.pool.query(
-      `
-      SELECT id FROM signal_favorites
-      WHERE user_id = $1 AND signal_id = $2
-      LIMIT 1
-      `,
+      `SELECT id FROM signal_favorites
+       WHERE user_id = $1 AND signal_id = $2 LIMIT 1`,
       [userId, signalId],
     );
 
@@ -41,27 +33,16 @@ export class FavoritesService {
       throw new BadRequestException('Signal already in favorites');
     }
 
-    // Add to favorites
     await this.pool.query(
-      `
-      INSERT INTO signal_favorites (user_id, signal_id)
-      VALUES ($1, $2)
-      `,
+      `INSERT INTO signal_favorites (user_id, signal_id) VALUES ($1, $2)`,
       [userId, signalId],
     );
   }
 
-  /**
-   * Remove signal from favorites
-   */
   async removeFavorite(userId: string, signalId: string): Promise<void> {
-    // Check if favorited
     const { rows: existing } = await this.pool.query(
-      `
-      SELECT id FROM signal_favorites
-      WHERE user_id = $1 AND signal_id = $2
-      LIMIT 1
-      `,
+      `SELECT id FROM signal_favorites
+       WHERE user_id = $1 AND signal_id = $2 LIMIT 1`,
       [userId, signalId],
     );
 
@@ -69,20 +50,16 @@ export class FavoritesService {
       throw new NotFoundException('Signal not in favorites');
     }
 
-    // Remove from favorites
     await this.pool.query(
-      `
-      DELETE FROM signal_favorites
-      WHERE user_id = $1 AND signal_id = $2
-      `,
+      `DELETE FROM signal_favorites WHERE user_id = $1 AND signal_id = $2`,
       [userId, signalId],
     );
   }
 
-  /**
-   * Get user's favorite signals
-   */
   async getFavorites(userId: string) {
+    // Get viewer's access level
+    const viewerAccess = await this.getViewerAccess(userId);
+
     const { rows } = await this.pool.query(
       `
       SELECT 
@@ -105,8 +82,9 @@ export class FavoritesService {
       [userId],
     );
 
-    // Format signals using the same method as SignalsService
-    const signals = rows.map((row) => this.formatSignalResponse(row));
+    const signals = rows.map((row) =>
+      this.formatSignalResponse(row, viewerAccess),
+    );
 
     return {
       signals,
@@ -114,28 +92,133 @@ export class FavoritesService {
     };
   }
 
-  /**
-   * Format signal response for frontend (similar to SignalsService)
-   */
-  private formatSignalResponse(row: any) {
-    const isPaid = row.access_type === 'PAID';
-    const isPurchased = row.is_purchased === true;
+  // ============================================
+  // ACCESS CONTROL
+  // ============================================
 
-    // MUHIM: Yopilgan signallar doimo ochiq (tarixiy ma'lumot)
+  private async getViewerAccess(viewerId: string): Promise<{
+    isAdmin: boolean;
+    hasPremium: boolean;
+    userId: string;
+  }> {
+    const { rows } = await this.pool.query(
+      `
+      SELECT 
+        id,
+        role,
+        subscription_plan,
+        subscription_expires_at
+      FROM users
+      WHERE id = $1
+      `,
+      [viewerId],
+    );
+
+    if (!rows[0]) {
+      return { isAdmin: false, hasPremium: false, userId: viewerId };
+    }
+
+    const user = rows[0];
+    const isAdmin = user.role === 'admin';
+    const hasPremium =
+      user.subscription_plan === 'premium' &&
+      user.subscription_expires_at &&
+      new Date(user.subscription_expires_at) > new Date();
+
+    return { isAdmin, hasPremium, userId: user.id };
+  }
+
+  private calculateIsLocked(
+    row: any,
+    viewerAccess: { isAdmin: boolean; hasPremium: boolean; userId: string },
+  ): boolean {
+    const isFree = row.access_type === 'FREE';
+    const isPurchased = row.is_purchased === true;
+    const isOwner = row.seller_id === viewerAccess.userId;
     const isClosedStatus = ['CLOSED_TP', 'CLOSED_SL', 'CANCELED'].includes(
       row.status,
     );
-    const isLocked = isPaid && !isPurchased && !isClosedStatus;
+
+    // Admin - barcha signallar ochiq
+    if (viewerAccess.isAdmin) {
+      return false;
+    }
+
+    // Signal egasi - o'z signallari ochiq
+    if (isOwner) {
+      return false;
+    }
+
+    // Sotib olingan - ochiq
+    if (isPurchased) {
+      return false;
+    }
+
+    // Yopilgan signallar - ochiq (tarixiy)
+    if (isClosedStatus) {
+      return false;
+    }
+
+    // FREE + Premium - ochiq
+    if (isFree && viewerAccess.hasPremium) {
+      return false;
+    }
+
+    // Boshqa hollarda - yopiq
+    return true;
+  }
+
+  // ============================================
+  // CALCULATIONS
+  // ============================================
+
+  private calculatePotentialProfit(ep: number, tp1: number): number {
+    if (!ep || ep <= 0 || !tp1) return 0;
+    return Number((((tp1 - ep) / ep) * 100).toFixed(2));
+  }
+
+  private calculatePotentialLoss(ep: number, sl: number): number {
+    if (!ep || ep <= 0 || !sl) return 0;
+    return Number((((ep - sl) / ep) * 100).toFixed(2));
+  }
+
+  private calculateRiskRatio(ep: number, tp1: number, sl: number): number {
+    if (!ep || !tp1 || !sl) return 0;
+    const reward = tp1 - ep;
+    const risk = ep - sl;
+    if (risk <= 0) return 0;
+    return Number((reward / risk).toFixed(2));
+  }
+
+  // ============================================
+  // FORMATTING
+  // ============================================
+
+  private formatSignalResponse(
+    row: any,
+    viewerAccess: { isAdmin: boolean; hasPremium: boolean; userId: string },
+  ) {
+    const isLocked = this.calculateIsLocked(row, viewerAccess);
+
+    const ep = Number(row.ep) || 0;
+    const tp1 = Number(row.tp1) || 0;
+    const tp2 = row.tp2 ? Number(row.tp2) : null;
+    const sl = Number(row.sl) || 0;
+
+    // BARCHA signallarda hisoblanadi
+    const potentialProfit = this.calculatePotentialProfit(ep, tp1);
+    const potentialLoss = this.calculatePotentialLoss(ep, sl);
+    const riskRatio = this.calculateRiskRatio(ep, tp1, sl);
 
     return {
       id: row.id,
       ticker: isLocked ? '********' : row.ticker,
       direction: row.direction || 'BUY',
-      entry: isLocked ? null : Number(row.ep),
-      ep: isLocked ? null : Number(row.ep),
-      tp1: isLocked ? null : Number(row.tp1),
-      tp2: row.tp2 ? (isLocked ? null : Number(row.tp2)) : null,
-      sl: isLocked ? null : Number(row.sl),
+      entry: isLocked ? null : ep,
+      ep: isLocked ? null : ep,
+      tp1: isLocked ? null : tp1,
+      tp2: isLocked ? null : tp2,
+      sl: isLocked ? null : sl,
       currentPrice: null,
       status: this.mapStatus(row.status),
       accessType: row.access_type,
@@ -145,7 +228,13 @@ export class FavoritesService {
       islamiclyStatus: row.islamicly_status,
       musaffaStatus: row.musaffa_status,
       isLocked,
-      isPurchased,
+      isPurchased: row.is_purchased === true,
+
+      // BARCHA signallarda ko'rinadi
+      potentialProfit,
+      potentialLoss,
+      riskRatio,
+
       likes: 0,
       dislikes: 0,
       createdAt: row.created_at,
@@ -168,9 +257,6 @@ export class FavoritesService {
     };
   }
 
-  /**
-   * Map backend status to frontend status
-   */
   private mapStatus(status: string): string {
     const statusMap: Record<string, string> = {
       WAIT_EP: 'WAITING_ENTRY',

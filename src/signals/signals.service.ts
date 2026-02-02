@@ -1,5 +1,5 @@
 // src/signals/signals.service.ts
-// YANGILANGAN - Results tab da signallar doimo ochiq
+// YANGILANGAN - Subscription-based locking logic
 
 import {
   Inject,
@@ -12,6 +12,20 @@ import { CreateSignalDto } from './dto/create-signal.dto';
 import { SignalStatus } from './constants/signal.constants';
 import { FilterMatcherService } from 'src/filters/filter-matcher.service';
 import { ActiveSymbolsService } from 'src/pricing/active-symbols.service';
+
+/**
+ * YANGI LOCKING MANTIQ:
+ *
+ * | Foydalanuvchi               | FREE signallar | PAID signallar          |
+ * |-----------------------------|----------------|-------------------------|
+ * | role='admin'                | 🔓 UNLOCKED    | 🔓 UNLOCKED             |
+ * | Premium subscriber (faol)  | 🔓 UNLOCKED    | 🔒 LOCKED (sotib olish) |
+ * | Oddiy user (free)          | 🔒 LOCKED      | 🔒 LOCKED               |
+ * | Results tab (yopilgan)     | 🔓 UNLOCKED    | 🔓 UNLOCKED             |
+ *
+ * Signal egasi (seller) - o'z signallari doimo ochiq
+ * Sotib olingan signallar - doimo ochiq
+ */
 
 @Injectable()
 export class SignalsService {
@@ -53,7 +67,7 @@ export class SignalsService {
   }
 
   /**
-   * List signals with optional tab filter and pagination
+   * List signals with subscription-aware locking
    */
   async list(
     viewerId?: string,
@@ -68,13 +82,15 @@ export class SignalsService {
     const limit = Math.min(params?.limit || 20, 100);
     const offset = (page - 1) * limit;
 
-    // Build status filter based on tab
     let statusFilter = '';
     if (tab === 'live') {
       statusFilter = `WHERE s.status IN ('WAIT_EP', 'IN_TRADE')`;
     } else if (tab === 'results') {
       statusFilter = `WHERE s.status IN ('CLOSED_TP', 'CLOSED_SL', 'CANCELED')`;
     }
+
+    // Get viewer's access level
+    const viewerAccess = await this.getViewerAccess(viewerId);
 
     const { rows } = await this.pool.query(
       `
@@ -97,17 +113,13 @@ export class SignalsService {
       [viewerId ?? null, limit, offset],
     );
 
-    // Get total count
     const { rows: countRows } = await this.pool.query(
-      `
-      SELECT COUNT(*) as total
-      FROM signals s
-      ${statusFilter}
-      `,
+      `SELECT COUNT(*) as total FROM signals s ${statusFilter}`,
     );
 
-    // MUHIM: tab parametrini formatSignalResponse ga uzatamiz
-    const signals = rows.map((s) => this.formatSignalResponse(s, tab));
+    const signals = rows.map((s) =>
+      this.formatSignalResponse(s, viewerAccess, tab),
+    );
 
     return {
       signals,
@@ -118,9 +130,11 @@ export class SignalsService {
   }
 
   /**
-   * Find signal by ID with purchase access check
+   * Find signal by ID with subscription-aware locking
    */
   async findByIdWithAccess(id: string, viewerId?: string) {
+    const viewerAccess = await this.getViewerAccess(viewerId);
+
     const { rows } = await this.pool.query(
       `
       SELECT 
@@ -144,14 +158,13 @@ export class SignalsService {
       throw new NotFoundException('Signal not found');
     }
 
-    // Signal detail: yopilgan bo'lsa results sifatida format qilamiz
     const row = rows[0];
     const isClosedStatus = ['CLOSED_TP', 'CLOSED_SL', 'CANCELED'].includes(
       row.status,
     );
     const tab = isClosedStatus ? 'results' : 'live';
 
-    return this.formatSignalResponse(row, tab);
+    return this.formatSignalResponse(row, viewerAccess, tab);
   }
 
   async findById(id: string) {
@@ -183,7 +196,7 @@ export class SignalsService {
   }
 
   /**
-   * Get user's own signals
+   * Get user's own signals (always unlocked)
    */
   async getMySignals(userId: string, params?: { tab?: 'live' | 'results' }) {
     const tab = params?.tab || 'live';
@@ -213,39 +226,176 @@ export class SignalsService {
       [userId],
     );
 
+    // Own signals are always unlocked
+    const ownerAccess = { isAdmin: true, hasPremium: true, userId };
+
     return {
-      signals: rows.map((s) => this.formatSignalResponse(s, tab)),
+      signals: rows.map((s) => this.formatSignalResponse(s, ownerAccess, tab)),
       total: rows.length,
     };
   }
 
-  /**
-   * Format signal response for frontend
-   * @param row - Database row
-   * @param tab - Optional tab parameter ('live' | 'results')
-   *              If 'results', signal is always unlocked (historical data)
-   */
-  private formatSignalResponse(row: any, tab?: 'live' | 'results') {
-    const isPaid = row.access_type === 'PAID';
-    const isPurchased = row.is_purchased === true;
+  // ============================================
+  // ACCESS CONTROL
+  // ============================================
 
-    // MUHIM: Results tab da signallar doimo ochiq (tarixiy ma'lumot)
-    // Yopilgan signallar (CLOSED_TP, CLOSED_SL, CANCELED) sotib olinishi shart emas
+  /**
+   * Get viewer's access level
+   */
+  private async getViewerAccess(viewerId?: string): Promise<{
+    isAdmin: boolean;
+    hasPremium: boolean;
+    userId: string | null;
+  }> {
+    if (!viewerId) {
+      return { isAdmin: false, hasPremium: false, userId: null };
+    }
+
+    const { rows } = await this.pool.query(
+      `
+      SELECT 
+        id,
+        role,
+        subscription_plan,
+        subscription_expires_at
+      FROM users
+      WHERE id = $1
+      `,
+      [viewerId],
+    );
+
+    if (!rows[0]) {
+      return { isAdmin: false, hasPremium: false, userId: null };
+    }
+
+    const user = rows[0];
+    const isAdmin = user.role === 'admin';
+    const hasPremium =
+      user.subscription_plan === 'premium' &&
+      user.subscription_expires_at &&
+      new Date(user.subscription_expires_at) > new Date();
+
+    return { isAdmin, hasPremium, userId: user.id };
+  }
+
+  /**
+   * Calculate if signal should be locked
+   *
+   * MANTIQ:
+   * 1. Admin - hamma narsa ochiq
+   * 2. Signal egasi - o'z signallari ochiq
+   * 3. Sotib olingan - ochiq
+   * 4. Results tab (yopilgan) - ochiq
+   * 5. FREE signal + Premium subscriber - ochiq
+   * 6. Boshqa hollarda - yopiq
+   */
+  private calculateIsLocked(
+    row: any,
+    viewerAccess: {
+      isAdmin: boolean;
+      hasPremium: boolean;
+      userId: string | null;
+    },
+    tab?: 'live' | 'results',
+  ): boolean {
+    const isFree = row.access_type === 'FREE';
+    const isPurchased = row.is_purchased === true;
+    const isOwner =
+      viewerAccess.userId && row.seller_id === viewerAccess.userId;
     const isClosedStatus = ['CLOSED_TP', 'CLOSED_SL', 'CANCELED'].includes(
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
       row.status,
     );
-    const isLocked =
-      isPaid && !isPurchased && !isClosedStatus && tab !== 'results';
+
+    // 1. Admin - barcha signallar ochiq
+    if (viewerAccess.isAdmin) {
+      return false;
+    }
+
+    // 2. Signal egasi - o'z signallari ochiq
+    if (isOwner) {
+      return false;
+    }
+
+    // 3. Sotib olingan signal - ochiq
+    if (isPurchased) {
+      return false;
+    }
+
+    // 4. Results tab (yopilgan signallar) - tarixiy ma'lumot, ochiq
+    if (isClosedStatus || tab === 'results') {
+      return false;
+    }
+
+    // 5. FREE signal + Premium subscriber - ochiq
+    if (isFree && viewerAccess.hasPremium) {
+      return false;
+    }
+
+    // 6. Boshqa hollarda - yopiq
+    // FREE signal lekin premium yo'q - YOPIQ
+    // PAID signal lekin sotib olinmagan - YOPIQ
+    return true;
+  }
+
+  // ============================================
+  // CALCULATIONS
+  // ============================================
+
+  private calculatePotentialProfit(ep: number, tp1: number): number {
+    if (!ep || ep <= 0 || !tp1) return 0;
+    return Number((((tp1 - ep) / ep) * 100).toFixed(2));
+  }
+
+  private calculatePotentialLoss(ep: number, sl: number): number {
+    if (!ep || ep <= 0 || !sl) return 0;
+    return Number((((ep - sl) / ep) * 100).toFixed(2));
+  }
+
+  private calculateRiskRatio(ep: number, tp1: number, sl: number): number {
+    if (!ep || !tp1 || !sl) return 0;
+    const reward = tp1 - ep;
+    const risk = ep - sl;
+    if (risk <= 0) return 0;
+    return Number((reward / risk).toFixed(2));
+  }
+
+  // ============================================
+  // FORMATTING
+  // ============================================
+
+  private formatSignalResponse(
+    row: any,
+    viewerAccess: {
+      isAdmin: boolean;
+      hasPremium: boolean;
+      userId: string | null;
+    },
+    tab?: 'live' | 'results',
+  ) {
+    const isLocked = this.calculateIsLocked(row, viewerAccess, tab);
+
+    // Raqamli qiymatlarni olish (hisoblash uchun DOIMO kerak)
+    const ep = Number(row.ep) || 0;
+    const tp1 = Number(row.tp1) || 0;
+    const tp2 = row.tp2 ? Number(row.tp2) : null;
+    const sl = Number(row.sl) || 0;
+
+    // potentialProfit/Loss/riskRatio BARCHA signallarda ko'rinadi
+    const potentialProfit = this.calculatePotentialProfit(ep, tp1);
+    const potentialLoss = this.calculatePotentialLoss(ep, sl);
+    const riskRatio = this.calculateRiskRatio(ep, tp1, sl);
 
     return {
       id: row.id,
+      // Locked bo'lsa ticker va narxlar yashiriladi
       ticker: isLocked ? '********' : row.ticker,
       direction: row.direction || 'BUY',
-      entry: isLocked ? null : Number(row.ep),
-      ep: isLocked ? null : Number(row.ep),
-      tp1: isLocked ? null : Number(row.tp1),
-      tp2: row.tp2 ? (isLocked ? null : Number(row.tp2)) : null,
-      sl: isLocked ? null : Number(row.sl),
+      entry: isLocked ? null : ep,
+      ep: isLocked ? null : ep,
+      tp1: isLocked ? null : tp1,
+      tp2: isLocked ? null : tp2,
+      sl: isLocked ? null : sl,
       currentPrice: null,
       status: this.mapStatus(row.status),
       accessType: row.access_type,
@@ -255,7 +405,13 @@ export class SignalsService {
       islamiclyStatus: row.islamicly_status,
       musaffaStatus: row.musaffa_status,
       isLocked,
-      isPurchased,
+      isPurchased: row.is_purchased === true,
+
+      // BARCHA signallarda ko'rinadi (locked ham)
+      potentialProfit,
+      potentialLoss,
+      riskRatio,
+
       likes: 0,
       dislikes: 0,
       createdAt: row.created_at,
@@ -277,9 +433,6 @@ export class SignalsService {
     };
   }
 
-  /**
-   * Map backend status to frontend status
-   */
   private mapStatus(status: string): string {
     const statusMap: Record<string, string> = {
       WAIT_EP: 'WAITING_ENTRY',
