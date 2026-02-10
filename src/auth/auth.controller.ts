@@ -9,6 +9,7 @@ import {
 } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { ConfirmTelegramLoginDto } from './dto/telegram-auth.dto';
+import { TelegramWebAppAuthDto } from './dto/telegram-webapp.dto';
 import {
   JwtAuthGuard,
   type AuthenticatedRequest,
@@ -23,10 +24,15 @@ export class AuthController {
     private readonly authGateway: AuthWebSocketGateway,
   ) {}
 
+  // ==========================================
+  // WEBSITE LOGIN ENDPOINTS
+  // ==========================================
+
   /**
-   * Step 1: Initiate Telegram login
+   * Step 1: Initiate Telegram login (Website)
    * Website calls this to get a login_id and deep link
-   *    * POST /auth/telegram/initiate
+   *
+   * POST /auth/telegram/initiate
    * Response: { loginId, botUsername, deepLink, expiresIn }
    */
   @Throttle({ default: { limit: 10, ttl: 60 } })
@@ -36,8 +42,8 @@ export class AuthController {
   }
 
   /**
-   * Step 2: Confirm Telegram login (called by bot)
-   * Bot webhook calls this after user presses /start
+   * Step 2: Confirm Telegram login (called by bot webhook)
+   * Bot webhook calls this after user presses /start with loginId
    *
    * POST /auth/telegram/confirm
    * Body: { loginId, telegramId, telegramUsername?, ... }
@@ -65,7 +71,7 @@ export class AuthController {
   }
 
   /**
-   * Step 3: Check login status (polling fallback if WebSocket unavailable)
+   * Step 3: Check login status (polling fallback)
    *
    * GET /auth/telegram/status/:loginId
    * Response: { status: 'PENDING' | 'CONFIRMED' | 'EXPIRED', accessToken?, user? }
@@ -75,9 +81,40 @@ export class AuthController {
     return this.authService.checkLoginStatus(loginId);
   }
 
+  // ==========================================
+  // TELEGRAM WEBAPP ENDPOINT (Yangi)
+  // ==========================================
+
+  /**
+   * Telegram Web App (Mini App) orqali autentifikatsiya
+   * Frontend Telegram.WebApp.initData ni yuboradi
+   * Backend initData ni validate qiladi va JWT qaytaradi
+   *
+   * POST /auth/telegram/webapp
+   * Body: { initData: string }
+   * Response: { success: boolean, accessToken: string, user: {...} }
+   *
+   * Xatolar:
+   * - 401: Invalid/expired initData
+   * - 400: Missing required fields
+   */
+  @Throttle({ default: { limit: 30, ttl: 60 } })
+  @Post('telegram/webapp')
+  async authenticateWebApp(@Body() dto: TelegramWebAppAuthDto) {
+    return this.authService.validateWebAppInitData(dto.initData);
+  }
+
+  // ==========================================
+  // PROTECTED ENDPOINTS
+  // ==========================================
+
   /**
    * Get current user info (protected route)
-   * Works with JWT from Telegram auth
+   * Works with JWT from both website and WebApp auth
+   *
+   * GET /auth/me
+   * Headers: Authorization: Bearer <token>
+   * Response: User object
    */
   @UseGuards(JwtAuthGuard)
   @Get('me')
@@ -85,7 +122,9 @@ export class AuthController {
     return req.user;
   }
 
-  // ========== DISABLED LEGACY ENDPOINTS ==========
+  // ==========================================
+  // DISABLED LEGACY ENDPOINTS
+  // ==========================================
 
   /**
    * @deprecated Email/password registration is disabled

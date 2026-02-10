@@ -8,6 +8,7 @@ import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { Pool } from 'pg';
 import { v4 as uuidv4 } from 'uuid';
+import * as crypto from 'crypto';
 import type {
   TelegramLoginResponse,
   LoginConfirmedResponse,
@@ -31,6 +32,10 @@ export class AuthService {
     this.botUsername =
       this.config.get<string>('TELEGRAM_BOT_USERNAME') || 'your_bot';
   }
+
+  // ==========================================
+  // WEBSITE LOGIN METHODS (Mavjud)
+  // ==========================================
 
   /**
    * Step 1: Website initiates login
@@ -60,7 +65,7 @@ export class AuthService {
 
   /**
    * Step 2: Telegram bot confirms login
-   * Called by bot webhook when user presses /start
+   * Called by bot webhook when user presses /start with loginId
    */
   async confirmTelegramLogin(
     loginId: string,
@@ -161,22 +166,26 @@ export class AuthService {
   }> {
     const { rows } = await this.pool.query(
       `
-      SELECT pl.*, u.id as user_id, u.role, u.telegram_id, u.telegram_username
+      SELECT pl.status, pl.user_id, pl.expires_at,
+             u.id, u.telegram_id, u.telegram_username, u.role
       FROM pending_logins pl
-      LEFT JOIN users u ON pl.user_id = u.id
+      LEFT JOIN users u ON u.id = pl.user_id
       WHERE pl.id = $1
       `,
       [loginId],
     );
 
-    const login = rows[0];
+    const pending = rows[0];
 
-    if (!login) {
+    if (!pending) {
       return { status: 'EXPIRED' };
     }
 
-    // Check expiry
-    if (login.status === 'PENDING' && new Date(login.expires_at) < new Date()) {
+    // Check if expired
+    if (
+      pending.status === 'PENDING' &&
+      new Date(pending.expires_at) < new Date()
+    ) {
       await this.pool.query(
         `UPDATE pending_logins SET status = 'EXPIRED' WHERE id = $1`,
         [loginId],
@@ -184,107 +193,191 @@ export class AuthService {
       return { status: 'EXPIRED' };
     }
 
-    if (login.status === 'CONFIRMED') {
-      const accessToken = this.signToken(login.user_id, login.role);
+    if (pending.status === 'CONFIRMED' && pending.user_id) {
+      const accessToken = this.signToken(pending.id, pending.role);
       return {
         status: 'CONFIRMED',
         accessToken,
         user: {
-          id: login.user_id,
-          telegramId: login.telegram_id,
-          telegramUsername: login.telegram_username,
-          role: login.role,
+          id: pending.id,
+          telegramId: pending.telegram_id,
+          telegramUsername: pending.telegram_username,
+          role: pending.role,
         },
       };
     }
 
-    return { status: login.status };
+    return { status: pending.status };
+  }
+
+  // ==========================================
+  // TELEGRAM WEBAPP METHODS (Yangi)
+  // ==========================================
+
+  /**
+   * Telegram Web App initData ni tekshirish va JWT qaytarish
+   * Bu Telegram Mini App ichidan auth qilish uchun ishlatiladi
+   *
+   * @param initData - window.Telegram.WebApp.initData dan keladi
+   */
+  async validateWebAppInitData(
+    initData: string,
+  ): Promise<LoginConfirmedResponse> {
+    // 1. initData ni parse qilish
+    const params = new URLSearchParams(initData);
+    const hash = params.get('hash');
+    params.delete('hash');
+
+    if (!hash) {
+      throw new UnauthorizedException('Invalid initData: missing hash');
+    }
+
+    // 2. Data check string yaratish (sorted key=value pairs)
+    const dataCheckString = Array.from(params.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([key, value]) => `${key}=${value}`)
+      .join('\n');
+
+    // 3. Secret key yaratish
+    const botToken = this.config.get<string>('TELEGRAM_BOT_TOKEN');
+    if (!botToken) {
+      throw new BadRequestException('Bot token not configured');
+    }
+
+    const secretKey = crypto
+      .createHmac('sha256', 'WebAppData')
+      .update(botToken)
+      .digest();
+
+    // 4. Hash ni tekshirish
+    const calculatedHash = crypto
+      .createHmac('sha256', secretKey)
+      .update(dataCheckString)
+      .digest('hex');
+
+    if (calculatedHash !== hash) {
+      throw new UnauthorizedException('Invalid initData: hash mismatch');
+    }
+
+    // 5. auth_date ni tekshirish (5 daqiqadan eski bo'lmasligi kerak)
+    const authDate = parseInt(params.get('auth_date') || '0', 10);
+    const now = Math.floor(Date.now() / 1000);
+    const WEBAPP_AUTH_EXPIRY_SECONDS = 300; // 5 daqiqa
+
+    if (now - authDate > WEBAPP_AUTH_EXPIRY_SECONDS) {
+      throw new UnauthorizedException('InitData expired');
+    }
+
+    // 6. User ma'lumotlarini olish
+    const userJson = params.get('user');
+    if (!userJson) {
+      throw new UnauthorizedException('Invalid initData: missing user');
+    }
+
+    let telegramUser: any;
+    try {
+      telegramUser = JSON.parse(userJson);
+    } catch {
+      throw new UnauthorizedException('Invalid initData: malformed user JSON');
+    }
+
+    if (!telegramUser.id) {
+      throw new UnauthorizedException('Invalid initData: missing user id');
+    }
+
+    // 7. Userni bazadan topish yoki yaratish
+    let user = await this.findUserByTelegramId(telegramUser.id);
+
+    if (!user) {
+      user = await this.createTelegramUser(
+        telegramUser.id,
+        telegramUser.username,
+        telegramUser.first_name,
+        telegramUser.last_name,
+      );
+    } else {
+      // Ma'lumotlarni yangilash
+      await this.updateTelegramInfo(
+        user.id,
+        telegramUser.username,
+        telegramUser.first_name,
+        telegramUser.last_name,
+      );
+    }
+
+    // 8. JWT token yaratish
+    const accessToken = this.signToken(user.id, user.role);
+
+    return {
+      success: true,
+      accessToken,
+      user: {
+        id: user.id,
+        telegramId: user.telegram_id,
+        telegramUsername: user.telegram_username,
+        role: user.role,
+      },
+    };
   }
 
   /**
-   * Get current user info INCLUDING subscription status
-   * GET /auth/me endpoint
+   * /start buyrug'ida userni avtomatik ro'yxatdan o'tkazish
+   * loginId bo'lmasa ham ishlaydi - WebApp uchun kerak
    */
-  async me(userId: string) {
-    const { rows } = await this.pool.query(
-      `
-      SELECT 
-        u.id,
-        u.telegram_id,
-        u.telegram_username,
-        u.telegram_first_name,
-        u.telegram_last_name,
-        u.avatar,
-        u.role,
-        u.score_x,
-        u.subscription_plan,
-        u.subscription_expires_at,
-        u.subscription_auto_renew,
-        u.created_at,
-        COALESCE(w.balance, 0) as balance
-      FROM users u
-      LEFT JOIN wallets w ON w.user_id = u.id
-      WHERE u.id = $1
-      `,
-      [userId],
-    );
+  async autoRegisterTelegramUser(
+    telegramId: number,
+    telegramUsername?: string,
+    telegramFirstName?: string,
+    telegramLastName?: string,
+  ): Promise<{ user: any; accessToken: string; isNew: boolean }> {
+    let user = await this.findUserByTelegramId(telegramId);
+    let isNew = false;
 
-    if (!rows[0]) {
-      throw new UnauthorizedException('User not found');
+    if (!user) {
+      user = await this.createTelegramUser(
+        telegramId,
+        telegramUsername,
+        telegramFirstName,
+        telegramLastName,
+      );
+      isNew = true;
+    } else {
+      // Mavjud user ma'lumotlarini yangilash
+      await this.updateTelegramInfo(
+        user.id,
+        telegramUsername,
+        telegramFirstName,
+        telegramLastName,
+      );
     }
 
-    const user = rows[0];
-    const now = new Date();
-    const expiresAt = user.subscription_expires_at
-      ? new Date(user.subscription_expires_at)
-      : null;
-
-    // Admin always has premium access
-    const isAdmin = user.role === 'admin';
-    const hasPremium =
-      isAdmin ||
-      (user.subscription_plan === 'premium' && expiresAt && expiresAt > now);
-
-    const daysRemaining =
-      hasPremium && expiresAt && !isAdmin
-        ? Math.ceil(
-            (expiresAt.getTime() - now.getTime()) / (1000 * 60 * 60 * 24),
-          )
-        : null;
+    const accessToken = this.signToken(user.id, user.role);
 
     return {
       user: {
         id: user.id,
         telegramId: user.telegram_id,
-        username: user.telegram_username,
-        displayName: user.telegram_first_name,
-        avatar: user.avatar,
+        telegramUsername: user.telegram_username,
         role: user.role,
-        scoreXPoints: Number(user.score_x),
-        balance: Number(user.balance),
-        createdAt: user.created_at,
       },
-      // Subscription ma'lumotlari
-      subscription: {
-        plan: isAdmin ? 'premium' : user.subscription_plan || 'free',
-        expiresAt: isAdmin ? null : user.subscription_expires_at,
-        autoRenew: user.subscription_auto_renew || false,
-        isActive: hasPremium,
-        daysRemaining: isAdmin ? null : daysRemaining,
-      },
+      accessToken,
+      isNew,
     };
   }
 
-  // ========== HELPER METHODS ==========
+  // ==========================================
+  // HELPER METHODS
+  // ==========================================
 
-  private async findUserByTelegramId(telegramId: number) {
+  private signToken(userId: string, role: string): string {
+    const payload: JwtPayload = { sub: userId, role };
+    return this.jwtService.sign(payload);
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-redundant-type-constituents
+  async findUserByTelegramId(telegramId: number): Promise<any | null> {
     const { rows } = await this.pool.query(
-      `
-      SELECT id, telegram_id, telegram_username, telegram_first_name, 
-             telegram_last_name, role, score_x
-      FROM users
-      WHERE telegram_id = $1
-      `,
+      `SELECT * FROM users WHERE telegram_id = $1`,
       [telegramId],
     );
     return rows[0] || null;
@@ -295,30 +388,15 @@ export class AuthService {
     telegramUsername?: string,
     telegramFirstName?: string,
     telegramLastName?: string,
-  ) {
+  ): Promise<any> {
     const { rows } = await this.pool.query(
       `
-      INSERT INTO users (
-        telegram_id, telegram_username, telegram_first_name, 
-        telegram_last_name, role, score_x
-      )
-      VALUES ($1, $2, $3, $4, 'user', 1000)
-      RETURNING id, telegram_id, telegram_username, role, score_x
+      INSERT INTO users (telegram_id, telegram_username, telegram_first_name, telegram_last_name, role)
+      VALUES ($1, $2, $3, $4, 'USER')
+      RETURNING *
       `,
-      [
-        telegramId,
-        telegramUsername || null,
-        telegramFirstName || null,
-        telegramLastName || null,
-      ],
+      [telegramId, telegramUsername, telegramFirstName, telegramLastName],
     );
-
-    // Create wallet for new user
-    await this.pool.query(
-      `INSERT INTO wallets (user_id, balance) VALUES ($1, 0)`,
-      [rows[0].id],
-    );
-
     return rows[0];
   }
 
@@ -327,47 +405,31 @@ export class AuthService {
     telegramUsername?: string,
     telegramFirstName?: string,
     telegramLastName?: string,
-  ) {
+  ): Promise<void> {
     await this.pool.query(
       `
       UPDATE users
-      SET telegram_username = $2,
-          telegram_first_name = $3,
-          telegram_last_name = $4,
+      SET telegram_username = COALESCE($2, telegram_username),
+          telegram_first_name = COALESCE($3, telegram_first_name),
+          telegram_last_name = COALESCE($4, telegram_last_name),
           updated_at = NOW()
       WHERE id = $1
       `,
-      [
-        userId,
-        telegramUsername || null,
-        telegramFirstName || null,
-        telegramLastName || null,
-      ],
+      [userId, telegramUsername, telegramFirstName, telegramLastName],
     );
   }
 
-  private signToken(userId: string, role: string): string {
-    const payload: JwtPayload = {
-      sub: userId,
-      role,
+  // ==========================================
+  // LEGACY METHODS (Disabled)
+  // ==========================================
+
+  register() {
+    return {
+      message: 'Email/password registration is disabled. Use Telegram.',
     };
-    return this.jwtService.sign(payload);
   }
 
-  // ========== LEGACY METHODS (DISABLED) ==========
-  // These are kept for reference but should not be used
-
-  /** @deprecated Use Telegram auth instead */
-  register(): Promise<never> {
-    throw new BadRequestException(
-      'Email/password registration is disabled. Please use Telegram login.',
-    );
-  }
-
-  /** @deprecated Use Telegram auth instead */
-  login(): Promise<never> {
-    throw new BadRequestException(
-      'Email/password login is disabled. Please use Telegram login.',
-    );
+  login() {
+    return { message: 'Email/password login is disabled. Use Telegram.' };
   }
 }
