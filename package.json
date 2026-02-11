@@ -19,7 +19,12 @@
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "jest --config ./test/jest-e2e.json",
-    "start:ngrok": "ngrok http 3000"
+    "start:ngrok": "ngrok http 3000",
+
+    "bot:setup": "ts-node scripts/setup-bot.ts",
+    "bot:webhook:set": "ts-node scripts/setup-bot.ts webhook:set",
+    "bot:webhook:delete": "ts-node scripts/setup-bot.ts webhook:delete",
+    "bot:webhook:info": "ts-node scripts/setup-bot.ts webhook:info"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.1",
