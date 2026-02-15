@@ -168,7 +168,7 @@ export class AuthService {
     const { rows } = await this.pool.query(
       `
       SELECT pl.status, pl.user_id, pl.expires_at,
-       u.id AS uid, u.telegram_id, u.telegram_username, u.role
+            u.id as uid, u.telegram_id, u.telegram_username, u.role
       FROM pending_logins pl
       LEFT JOIN users u ON u.id = pl.user_id
       WHERE pl.id = $1
@@ -182,7 +182,6 @@ export class AuthService {
       return { status: 'EXPIRED' };
     }
 
-    // Check if expired
     if (
       pending.status === 'PENDING' &&
       new Date(pending.expires_at) < new Date()
@@ -195,13 +194,12 @@ export class AuthService {
     }
 
     if (pending.status === 'CONFIRMED' && pending.user_id) {
-      // FIXED: user_id va user jadvalidan ma'lumotlar ishlatiladi
-      const accessToken = this.signToken(pending.uid, pending.role);
+      const accessToken = this.signToken(pending.user_id, pending.role);
       return {
         status: 'CONFIRMED',
         accessToken,
         user: {
-          id: pending.uid,
+          id: pending.user_id,
           telegramId: pending.telegram_id,
           telegramUsername: pending.telegram_username,
           role: pending.role,
@@ -264,7 +262,7 @@ export class AuthService {
     // 5. auth_date ni tekshirish (5 daqiqadan eski bo'lmasligi kerak)
     const authDate = parseInt(params.get('auth_date') || '0', 10);
     const now = Math.floor(Date.now() / 1000);
-    const WEBAPP_AUTH_EXPIRY_SECONDS = 86400; // 5 daqiqa
+    const WEBAPP_AUTH_EXPIRY_SECONDS = 3600; // 5 daqiqa
 
     if (now - authDate > WEBAPP_AUTH_EXPIRY_SECONDS) {
       throw new UnauthorizedException('InitData expired');
