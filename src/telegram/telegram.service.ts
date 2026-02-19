@@ -6,21 +6,70 @@ import { ConfigService } from '@nestjs/config';
 export class TelegramService {
   private readonly bot: TelegramBot;
   private readonly logger = new Logger(TelegramService.name);
+  private readonly webAppUrl: string;
 
   constructor(private readonly config: ConfigService) {
-    this.bot = new TelegramBot(
-      this.config.get<string>('TELEGRAM_BOT_TOKEN')!,
-      { polling: false }, // NestJS o'zi webhook handle qiladi, kutubxona emas
-    );
+    this.bot = new TelegramBot(this.config.get<string>('TELEGRAM_BOT_TOKEN')!, {
+      polling: false,
+    });
+    this.webAppUrl =
+      this.config.get<string>('WEBAPP_URL') ||
+      'https://v0-score-x-trading-ui.vercel.app/';
   }
 
   getBot(): TelegramBot {
     return this.bot;
   }
 
+  /**
+   * Oddiy text xabar yuborish
+   */
   async sendMessage(chatId: string, text: string) {
     await this.bot.sendMessage(chatId, text, {
       parse_mode: 'HTML',
+    });
+  }
+
+  /**
+   * WebApp tugmali xabar yuborish
+   * Telegram Mini App ochish uchun inline keyboard bilan
+   */
+  async sendMessageWithWebApp(
+    chatId: string,
+    text: string,
+    buttonText: string = '📱 Open ScoreX',
+    webAppUrl?: string,
+  ) {
+    await this.bot.sendMessage(chatId, text, {
+      parse_mode: 'HTML',
+      reply_markup: {
+        inline_keyboard: [
+          [
+            {
+              text: buttonText,
+              web_app: { url: webAppUrl || this.webAppUrl },
+            },
+          ],
+        ],
+      },
+    });
+  }
+
+  /**
+   * Inline keyboard tugmali xabar yuborish (umumiy)
+   */
+  async sendMessageWithButtons(
+    chatId: string,
+    text: string,
+    buttons: Array<
+      Array<{ text: string; url?: string; web_app?: { url: string } }>
+    >,
+  ) {
+    await this.bot.sendMessage(chatId, text, {
+      parse_mode: 'HTML',
+      reply_markup: {
+        inline_keyboard: buttons,
+      },
     });
   }
 

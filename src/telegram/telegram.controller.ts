@@ -27,7 +27,7 @@ export class TelegramController {
 
   @Post('webhook')
   @HttpCode(200)
-  @UsePipes() // Global ValidationPipe ni o'chiradi — Telegram har xil fieldlar yuboradi
+  @UsePipes()
   async webhook(@Body() update: Record<string, any>) {
     const message = update.message;
 
@@ -49,16 +49,18 @@ export class TelegramController {
       const parts = text.split(' ');
 
       if (parts.length === 1) {
-        // login_id yo'q — oddiy start
-        await this.telegram.sendMessage(
+        // login_id yo'q — WebApp tugmasi bilan welcome xabar
+        await this.telegram.sendMessageWithWebApp(
           chatId,
-          '👋 Welcome to ScoreX!\n\n' +
-            'To login to the website, please initiate login from scorex.com',
+          '👋 <b>Welcome to ScoreX!</b>\n\n' +
+            '📊 Professional halal stock signals marketplace.\n\n' +
+            '👇 Tap the button below to open the app:',
+          '📱 Open ScoreX',
         );
         return { ok: true };
       }
 
-      // login_id bor — autentifikatsiya
+      // login_id bor — website autentifikatsiya
       const loginId = parts[1];
 
       try {
@@ -70,11 +72,13 @@ export class TelegramController {
           telegramUser.last_name,
         );
 
-        await this.telegram.sendMessage(
+        // Login muvaffaqiyatli — WebApp tugma bilan javob
+        await this.telegram.sendMessageWithWebApp(
           chatId,
           '✅ <b>Login Successful!</b>\n\n' +
-            'You can now return to your browser. You should be automatically logged in.\n\n' +
+            'You are now logged in. You can return to your browser or open the app below.\n\n' +
             `User ID: <code>${result.user.id}</code>`,
+          '📱 Open ScoreX',
         );
 
         this.logger.log(
@@ -83,11 +87,12 @@ export class TelegramController {
       } catch (error) {
         this.logger.error(`❌ Login failed: ${error.message}`);
 
-        await this.telegram.sendMessage(
+        await this.telegram.sendMessageWithWebApp(
           chatId,
           '❌ <b>Login Failed</b>\n\n' +
             'This login link may have expired or is invalid.\n' +
-            'Please try again from the website.',
+            'Please try again, or open the app directly:',
+          '📱 Open ScoreX',
         );
       }
 
@@ -96,29 +101,35 @@ export class TelegramController {
 
     // ── /help command ──
     if (text === '/help') {
-      await this.telegram.sendMessage(
+      await this.telegram.sendMessageWithWebApp(
         chatId,
         '🤖 <b>ScoreX Bot Commands</b>\n\n' +
-          '/start - Begin login process\n' +
-          '/help - Show this message\n\n' +
-          'To login, visit scorex.com and click "Login with Telegram"',
+          '/start - Welcome message & open app\n' +
+          '/help - Show this message\n' +
+          '/webapp - Open the trading app\n\n' +
+          '👇 Tap the button to open ScoreX:',
+        '📱 Open ScoreX',
       );
       return { ok: true };
     }
 
     // ── /webapp command ──
     if (text === '/webapp') {
-      await this.telegram.sendMessage(
+      await this.telegram.sendMessageWithWebApp(
         chatId,
-        '📱 Open the app using the menu button below, or visit:\nhttps://v0-score-x-trading-ui.vercel.app/',
+        '📱 <b>Open ScoreX App</b>\n\n' +
+          'Tap the button below to open the trading app:',
+        '📱 Open ScoreX',
       );
       return { ok: true };
     }
 
     // ── Noma'lum command ──
-    await this.telegram.sendMessage(
+    await this.telegram.sendMessageWithWebApp(
       chatId,
-      "I didn't understand that command. Use /help to see available commands.",
+      "I didn't understand that command.\n\n" +
+        'Use /help to see available commands, or open the app:',
+      '📱 Open ScoreX',
     );
 
     return { ok: true };
