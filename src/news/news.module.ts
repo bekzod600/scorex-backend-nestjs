@@ -1,18 +1,15 @@
-// src/favorites/favorites.module.ts
 import { Module } from '@nestjs/common';
 import { JwtModule } from '@nestjs/jwt';
+import { NewsService } from './news.service';
 import { ConfigModule, ConfigService } from '@nestjs/config';
-import { FavoritesController } from './favorites.controller';
-import { FavoritesService } from './favorites.service';
+import { NewsController, AdminNewsController } from './news.controller';
 import { DatabaseModule } from '../../database/database.module';
-import { SignalsModule } from '../signals/signals.module';
-import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import type { EnvVars } from '../../config/env.validation';
+import { JwtAuthGuard } from 'src/common/guards/jwt-auth.guard';
 
 @Module({
   imports: [
     DatabaseModule,
-    SignalsModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
@@ -24,8 +21,9 @@ import type { EnvVars } from '../../config/env.validation';
       }),
     }),
   ],
-  controllers: [FavoritesController],
-  providers: [FavoritesService, JwtAuthGuard],
-  exports: [FavoritesService],
+  // imports: [DatabaseModule],
+  controllers: [NewsController, AdminNewsController],
+  providers: [NewsService, JwtAuthGuard],
+  exports: [NewsService],
 })
-export class FavoritesModule {}
+export class NewsModule {}

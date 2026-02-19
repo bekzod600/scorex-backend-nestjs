@@ -28,6 +28,7 @@ import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { RequestLoggerMiddleware } from './common/middlewares/request-logger.middleware';
 import { TelegramModule } from './telegram/telegram.module';
 import { JobsModule } from './jobs/jobs.module';
+import { NewsModule } from './news/news.module';
 
 @Module({
   imports: [
@@ -57,6 +58,7 @@ import { JobsModule } from './jobs/jobs.module';
     SubscriptionsModule,
     FavoritesModule,
     SubscriptionModule,
+    NewsModule,
   ],
   providers: [
     {
