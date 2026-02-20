@@ -19,9 +19,11 @@ import {
 } from '@nestjs/common';
 import { TrainingCentersService } from './training-centers.service';
 import {
+  RegisterCenterDto,
   UpdateCenterDto,
   RateCenterDto,
   RejectCenterDto,
+  ReviewEnrollmentDto,
 } from './dto/training-centers.dto';
 import {
   JwtAuthGuard,
@@ -30,17 +32,13 @@ import {
 } from '../common/guards/jwt-auth.guard';
 
 // ============================================================
-// PUBLIC ROUTES: /training-centers
+// PUBLIC + AUTH ROUTES: /training-centers
 // ============================================================
 @Controller('training-centers')
 export class TrainingCentersController {
   constructor(private readonly service: TrainingCentersService) {}
 
-  /**
-   * GET /training-centers
-   * Tasdiqlangan va listed markazlar ro'yxati
-   * Auth ixtiyoriy — login qilgan bo'lsa enrollment/rating kontekst keladi
-   */
+  /** GET /training-centers — approved markazlar ro'yxati */
   @UseGuards(OptionalJwtAuthGuard)
   @Get()
   list(
@@ -61,11 +59,7 @@ export class TrainingCentersController {
     });
   }
 
-  /**
-   * GET /training-centers/my
-   * Owner o'z markazini ko'rish
-   * Requires auth
-   */
+  /** GET /training-centers/my — owner o'z markazini ko'radi */
   @UseGuards(JwtAuthGuard)
   @Get('my')
   getMy(@Req() req: AuthenticatedRequest) {
@@ -73,9 +67,45 @@ export class TrainingCentersController {
   }
 
   /**
-   * GET /training-centers/:id
-   * Bitta markaz detallari (faqat approved+listed)
+   * GET /training-centers/my/enrollment-requests
+   * Owner pending/approved/rejected so'rovlar ro'yxatini ko'radi
    */
+  @UseGuards(JwtAuthGuard)
+  @Get('my/enrollment-requests')
+  getMyRequests(@Req() req: AuthenticatedRequest) {
+    return this.service.getMyEnrollmentRequests(req.user.id);
+  }
+
+  /**
+   * PATCH /training-centers/my/enrollment-requests/:requestId/approve
+   * Owner so'rovni tasdiqlaydi → user "approved student" bo'ladi
+   */
+  @UseGuards(JwtAuthGuard)
+  @Patch('my/enrollment-requests/:requestId/approve')
+  @HttpCode(HttpStatus.OK)
+  approveRequest(
+    @Req() req: AuthenticatedRequest,
+    @Param('requestId', ParseUUIDPipe) requestId: string,
+  ) {
+    return this.service.approveEnrollment(requestId, req.user.id);
+  }
+
+  /**
+   * PATCH /training-centers/my/enrollment-requests/:requestId/reject
+   * Owner so'rovni rad etadi
+   */
+  @UseGuards(JwtAuthGuard)
+  @Patch('my/enrollment-requests/:requestId/reject')
+  @HttpCode(HttpStatus.OK)
+  rejectRequest(
+    @Req() req: AuthenticatedRequest,
+    @Param('requestId', ParseUUIDPipe) requestId: string,
+    @Body() dto: ReviewEnrollmentDto,
+  ) {
+    return this.service.rejectEnrollment(requestId, req.user.id, dto.note);
+  }
+
+  /** GET /training-centers/:id — bitta markaz detallari */
   @UseGuards(OptionalJwtAuthGuard)
   @Get(':id')
   getOne(
@@ -85,20 +115,14 @@ export class TrainingCentersController {
     return this.service.getApproved(id, req.user?.id);
   }
 
-  /**
-   * POST /training-centers
-   * Yangi markaz ro'yxatdan o'tkazish (har user faqat 1 ta)
-   */
+  /** POST /training-centers — yangi markaz ro'yxatdan o'tkazish */
   @UseGuards(JwtAuthGuard)
   @Post()
-  register(@Req() req: AuthenticatedRequest) {
-    return this.service.register(req.user.id);
+  register(@Req() req: AuthenticatedRequest, @Body() dto: RegisterCenterDto) {
+    return this.service.register(req.user.id, dto);
   }
 
-  /**
-   * PATCH /training-centers/my
-   * Owner o'z markazini yangilashi (faqat ruxsat berilgan maydonlar)
-   */
+  /** PATCH /training-centers/my — markaz ma'lumotlarini yangilash */
   @UseGuards(JwtAuthGuard)
   @Patch('my')
   updateMy(@Req() req: AuthenticatedRequest, @Body() dto: UpdateCenterDto) {
@@ -107,7 +131,8 @@ export class TrainingCentersController {
 
   /**
    * POST /training-centers/:id/enroll
-   * "Men shu yerda o'qidim" belgisi qo'yish
+   * "Studied here" — so'rov yuborish (TO'G'RIDAN ENROLLMENT EMAS!)
+   * Owner o'z markaziga so'rov yubora olmaydi (403)
    */
   @UseGuards(JwtAuthGuard)
   @Post(':id/enroll')
@@ -116,12 +141,12 @@ export class TrainingCentersController {
     @Req() req: AuthenticatedRequest,
     @Param('id', ParseUUIDPipe) id: string,
   ) {
-    return this.service.enroll(id, req.user.id);
+    return this.service.requestEnroll(id, req.user.id);
   }
 
   /**
    * DELETE /training-centers/:id/enroll
-   * Belgi olib tashlash
+   * So'rovni bekor qilish yoki studentlikdan chiqish
    */
   @UseGuards(JwtAuthGuard)
   @Delete(':id/enroll')
@@ -130,13 +155,10 @@ export class TrainingCentersController {
     @Req() req: AuthenticatedRequest,
     @Param('id', ParseUUIDPipe) id: string,
   ) {
-    return this.service.unenroll(id, req.user.id);
+    return this.service.cancelEnroll(id, req.user.id);
   }
 
-  /**
-   * POST /training-centers/:id/rate
-   * 1-5 yulduz reyting berish
-   */
+  /** POST /training-centers/:id/rate — 1-5 yulduz reyting */
   @UseGuards(JwtAuthGuard)
   @Post(':id/rate')
   @HttpCode(HttpStatus.OK)
@@ -163,10 +185,6 @@ export class AdminTrainingCentersController {
     }
   }
 
-  /**
-   * GET /admin/training-centers
-   * Barcha markazlar (status filter bilan)
-   */
   @Get()
   listAll(
     @Req() req: AuthenticatedRequest,
@@ -179,10 +197,6 @@ export class AdminTrainingCentersController {
     return this.service.adminList({ page, limit, status, search });
   }
 
-  /**
-   * GET /admin/training-centers/:id
-   * Bitta markazni ko'rish (har qanday status)
-   */
   @Get(':id')
   getById(
     @Req() req: AuthenticatedRequest,
@@ -192,10 +206,6 @@ export class AdminTrainingCentersController {
     return this.service.getById(id);
   }
 
-  /**
-   * PATCH /admin/training-centers/:id/approve
-   * Markazni tasdiqlash
-   */
   @Patch(':id/approve')
   approve(
     @Req() req: AuthenticatedRequest,
@@ -205,10 +215,6 @@ export class AdminTrainingCentersController {
     return this.service.adminApprove(id, req.user.id);
   }
 
-  /**
-   * PATCH /admin/training-centers/:id/reject
-   * Markazni rad etish (sabab bilan)
-   */
   @Patch(':id/reject')
   reject(
     @Req() req: AuthenticatedRequest,
@@ -219,10 +225,6 @@ export class AdminTrainingCentersController {
     return this.service.adminReject(id, req.user.id, dto.reason);
   }
 
-  /**
-   * PATCH /admin/training-centers/:id/toggle-listing
-   * Ko'rinishini yoqish/o'chirish
-   */
   @Patch(':id/toggle-listing')
   toggleListing(
     @Req() req: AuthenticatedRequest,

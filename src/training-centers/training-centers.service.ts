@@ -2,16 +2,18 @@
 import {
   Injectable,
   NotFoundException,
-  // ForbiddenException,
+  ForbiddenException,
   ConflictException,
   BadRequestException,
   Inject,
 } from '@nestjs/common';
 import { Pool } from 'pg';
 import type {
+  RegisterCenterDto,
   UpdateCenterDto,
   TrainingCenterResponse,
   CentersListResponse,
+  EnrollmentRequest,
 } from './dto/training-centers.dto';
 
 @Injectable()
@@ -20,7 +22,6 @@ export class TrainingCentersService {
 
   // ============================================================
   // PUBLIC: Tasdiqlangan markazlar ro'yxati
-  // GET /training-centers
   // ============================================================
   async listApproved(params: {
     page?: number;
@@ -56,7 +57,6 @@ export class TrainingCentersService {
     }
 
     const where = conditions.join(' AND ');
-
     const sortMap: Record<string, string> = {
       rating: 'tc.rating DESC, tc.rating_count DESC',
       students: 'tc.students_count DESC',
@@ -64,42 +64,34 @@ export class TrainingCentersService {
     };
     const orderBy = sortMap[params.sort ?? 'rating'];
 
-    // Enrollment va rating konteksti (agar login qilgan bo'lsa)
-    const enrolledSubquery = params.userId
-      ? `(SELECT 1 FROM center_enrollments ce WHERE ce.center_id = tc.id AND ce.user_id = '${params.userId}') IS NOT NULL`
+    // is_enrolled: faqat APPROVED enrollment bo'lsa true
+    // is_request_pending: pending so'rov bormi
+    const enrolledSub = params.userId
+      ? `EXISTS(SELECT 1 FROM center_enrollments ce WHERE ce.center_id = tc.id AND ce.user_id = '${params.userId}' AND ce.status = 'approved')`
       : 'FALSE';
 
-    const userRatingSubquery = params.userId
+    const pendingSub = params.userId
+      ? `EXISTS(SELECT 1 FROM center_enrollments ce WHERE ce.center_id = tc.id AND ce.user_id = '${params.userId}' AND ce.status = 'pending')`
+      : 'FALSE';
+
+    const userRatingSub = params.userId
       ? `(SELECT cr.rating FROM center_ratings cr WHERE cr.center_id = tc.id AND cr.user_id = '${params.userId}' LIMIT 1)`
       : 'NULL';
 
     const [listResult, countResult] = await Promise.all([
       this.pool.query(
         `SELECT
-           tc.id,
-           tc.name,
-           tc.description,
-           tc.city,
-           tc.address,
-           tc.phone,
-           tc.telegram,
-           tc.website,
-           tc.logo_url,
-           tc.status,
-           tc.is_listed,
-           tc.rating,
-           tc.rating_count,
-           tc.students_count,
-           tc.rejection_reason,
-           tc.approved_at,
+           tc.id, tc.name, tc.description, tc.city, tc.address,
+           tc.phone, tc.telegram, tc.website, tc.logo_url,
+           tc.status, tc.is_listed, tc.rating, tc.rating_count,
+           tc.students_count, tc.rejection_reason, tc.approved_at,
            tc.created_at,
-           -- Owner info
            u.id               AS owner_id,
            u.telegram_username AS owner_username,
            u.telegram_first_name AS owner_first_name,
-           -- User context
-           ${enrolledSubquery}  AS is_enrolled,
-           ${userRatingSubquery} AS user_rating
+           ${enrolledSub}    AS is_enrolled,
+           ${pendingSub}     AS is_request_pending,
+           ${userRatingSub}  AS user_rating
          FROM training_centers tc
          LEFT JOIN users u ON u.id = tc.owner_id
          WHERE ${where}
@@ -123,7 +115,6 @@ export class TrainingCentersService {
 
   // ============================================================
   // PUBLIC: Bitta markaz detallari
-  // GET /training-centers/:id
   // ============================================================
   async getApproved(
     id: string,
@@ -134,7 +125,7 @@ export class TrainingCentersService {
       throw new NotFoundException('Training center not found');
     }
 
-    // Students (oxirgi 50 ta)
+    // Faqat approved studentlar
     const studentsResult = await this.pool.query(
       `SELECT
          ce.user_id,
@@ -143,7 +134,7 @@ export class TrainingCentersService {
          ce.created_at AS enrolled_at
        FROM center_enrollments ce
        LEFT JOIN users u ON u.id = ce.user_id
-       WHERE ce.center_id = $1
+       WHERE ce.center_id = $1 AND ce.status = 'approved'
        ORDER BY ce.created_at DESC
        LIMIT 50`,
       [id],
@@ -165,7 +156,6 @@ export class TrainingCentersService {
 
   // ============================================================
   // AUTH: Owner o'z markazini olish
-  // GET /training-centers/my
   // ============================================================
   async getMy(userId: string): Promise<TrainingCenterResponse | null> {
     const result = await this.pool.query(
@@ -179,17 +169,17 @@ export class TrainingCentersService {
        WHERE tc.owner_id = $1`,
       [userId],
     );
-
     if (!result.rows.length) return null;
     return this.formatCenter(result.rows[0]);
   }
 
   // ============================================================
   // AUTH: Yangi markaz ro'yxatdan o'tkazish
-  // POST /training-centers
   // ============================================================
-  async register(userId: string): Promise<TrainingCenterResponse> {
-    // Har bir user faqat bitta markaz ochishi mumkin
+  async register(
+    userId: string,
+    dto: RegisterCenterDto,
+  ): Promise<TrainingCenterResponse> {
     const existing = await this.pool.query(
       `SELECT id FROM training_centers WHERE owner_id = $1`,
       [userId],
@@ -200,12 +190,28 @@ export class TrainingCentersService {
       );
     }
 
-    return this.getMy(userId) as Promise<TrainingCenterResponse>;
+    await this.pool.query(
+      `INSERT INTO training_centers
+         (owner_id, name, description, city, address, phone, telegram, website, logo_url, status, is_listed)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending', TRUE)`,
+      [
+        userId,
+        dto.name,
+        dto.description,
+        dto.city ?? null,
+        dto.address ?? null,
+        dto.phone ?? null,
+        dto.telegram ?? null,
+        dto.website ?? null,
+        dto.logo_url ?? null,
+      ],
+    );
+
+    return (await this.getMy(userId))!;
   }
 
   // ============================================================
   // AUTH: Owner o'z markazini yangilashi
-  // PATCH /training-centers/my
   // ============================================================
   async updateMy(
     userId: string,
@@ -219,36 +225,23 @@ export class TrainingCentersService {
       throw new NotFoundException('You do not have a registered center');
     }
 
-    const centerId = existing.rows[0].id;
-
+    const centerId = existing.rows[0].id as string;
     const fields: string[] = [];
     const values: unknown[] = [];
     let idx = 1;
 
-    if (dto.description !== undefined) {
-      fields.push(`description = $${idx++}`);
-      values.push(dto.description);
-    }
-    if (dto.address !== undefined) {
-      fields.push(`address = $${idx++}`);
-      values.push(dto.address);
-    }
-    if (dto.phone !== undefined) {
-      fields.push(`phone = $${idx++}`);
-      values.push(dto.phone);
-    }
-    if (dto.telegram !== undefined) {
-      fields.push(`telegram = $${idx++}`);
-      values.push(dto.telegram);
-    }
-    if (dto.website !== undefined) {
-      fields.push(`website = $${idx++}`);
-      values.push(dto.website);
-    }
-    if (dto.logo_url !== undefined) {
-      fields.push(`logo_url = $${idx++}`);
-      values.push(dto.logo_url);
-    }
+    const addField = (col: string, val: unknown) => {
+      if (val !== undefined) {
+        fields.push(`${col} = $${idx++}`);
+        values.push(val);
+      }
+    };
+    addField('description', dto.description);
+    addField('address', dto.address);
+    addField('phone', dto.phone);
+    addField('telegram', dto.telegram);
+    addField('website', dto.website);
+    addField('logo_url', dto.logo_url);
 
     if (fields.length) {
       values.push(centerId);
@@ -258,94 +251,216 @@ export class TrainingCentersService {
       );
     }
 
-    return this.getMy(userId) as Promise<TrainingCenterResponse>;
+    return (await this.getMy(userId))!;
   }
 
   // ============================================================
-  // AUTH: "Men shu yerda o'qidim" belgisi qo'yish/olib tashlash
+  // AUTH: "Studied here" SO'ROV yuborish (to'g'ridan enrollment emas!)
   // POST /training-centers/:id/enroll
-  // DELETE /training-centers/:id/enroll
   // ============================================================
-  async enroll(
+  async requestEnroll(
     centerId: string,
     userId: string,
-  ): Promise<{ enrolled: boolean; students_count: number }> {
-    // Markaz mavjudligini tekshir
+  ): Promise<{ status: 'pending'; message: string }> {
+    // Markaz mavjud va approved'mi?
     const centerRes = await this.pool.query(
-      `SELECT id, students_count FROM training_centers WHERE id = $1 AND status = 'approved'`,
+      `SELECT id, owner_id FROM training_centers WHERE id = $1 AND status = 'approved'`,
       [centerId],
     );
-    if (!centerRes.rows.length) {
+    if (!centerRes.rows.length)
       throw new NotFoundException('Training center not found');
+
+    const center = centerRes.rows[0] as { id: string; owner_id: string };
+
+    // Owner o'z markaziga so'rov yubora olmaydi
+    if (center.owner_id === userId) {
+      throw new ForbiddenException('You cannot enroll in your own center');
     }
 
-    // Allaqachon ro'yxatdan o'tganmi?
+    // Allaqachon so'rov yoki enrollment bormi?
     const existing = await this.pool.query(
-      `SELECT id FROM center_enrollments WHERE center_id = $1 AND user_id = $2`,
+      `SELECT id, status FROM center_enrollments
+       WHERE center_id = $1 AND user_id = $2`,
       [centerId, userId],
     );
     if (existing.rows.length) {
-      throw new ConflictException('Already enrolled in this center');
+      const existingStatus = existing.rows[0].status as string;
+      if (existingStatus === 'approved') {
+        throw new ConflictException('You are already a student of this center');
+      }
+      if (existingStatus === 'pending') {
+        throw new ConflictException('Your request is already pending approval');
+      }
+      // rejected → qayta so'rov yuborish mumkin
+      await this.pool.query(
+        `UPDATE center_enrollments SET status = 'pending', reviewed_at = NULL
+         WHERE center_id = $1 AND user_id = $2`,
+        [centerId, userId],
+      );
+    } else {
+      await this.pool.query(
+        `INSERT INTO center_enrollments (center_id, user_id, status) VALUES ($1, $2, 'pending')`,
+        [centerId, userId],
+      );
     }
 
-    await this.pool.query(
-      `INSERT INTO center_enrollments (center_id, user_id) VALUES ($1, $2)`,
-      [centerId, userId],
-    );
-
-    const updated = await this.pool.query(
-      `SELECT students_count FROM training_centers WHERE id = $1`,
-      [centerId],
-    );
-
     return {
-      enrolled: true,
-      students_count: updated.rows[0]?.students_count ?? 0,
-    };
-  }
-
-  async unenroll(
-    centerId: string,
-    userId: string,
-  ): Promise<{ enrolled: boolean; students_count: number }> {
-    await this.pool.query(
-      `DELETE FROM center_enrollments WHERE center_id = $1 AND user_id = $2`,
-      [centerId, userId],
-    );
-
-    const updated = await this.pool.query(
-      `SELECT students_count FROM training_centers WHERE id = $1`,
-      [centerId],
-    );
-
-    return {
-      enrolled: false,
-      students_count: updated.rows[0]?.students_count ?? 0,
+      status: 'pending',
+      message:
+        "So'rovingiz qabul qilindi. O'quv markaz egasi tasdiqlagan so'ng studentga aylanasiz.",
     };
   }
 
   // ============================================================
-  // AUTH: Reyting berish (1-5 yulduz)
-  // POST /training-centers/:id/rate
+  // AUTH: So'rovni bekor qilish
+  // DELETE /training-centers/:id/enroll
+  // ============================================================
+  async cancelEnroll(
+    centerId: string,
+    userId: string,
+  ): Promise<{ cancelled: boolean }> {
+    await this.pool.query(
+      `DELETE FROM center_enrollments
+       WHERE center_id = $1 AND user_id = $2 AND status IN ('pending', 'approved')`,
+      [centerId, userId],
+    );
+    return { cancelled: true };
+  }
+
+  // ============================================================
+  // OWNER: Pending so'rovlar ro'yxati
+  // GET /training-centers/my/enrollment-requests
+  // ============================================================
+  async getMyEnrollmentRequests(ownerId: string): Promise<EnrollmentRequest[]> {
+    const centerRes = await this.pool.query(
+      `SELECT id FROM training_centers WHERE owner_id = $1`,
+      [ownerId],
+    );
+    if (!centerRes.rows.length) return [];
+
+    const centerId = centerRes.rows[0].id as string;
+
+    const result = await this.pool.query(
+      `SELECT
+         ce.id,
+         ce.center_id,
+         ce.user_id,
+         ce.status,
+         ce.created_at,
+         ce.reviewed_at,
+         u.telegram_username AS username,
+         u.telegram_first_name AS first_name
+       FROM center_enrollments ce
+       LEFT JOIN users u ON u.id = ce.user_id
+       WHERE ce.center_id = $1
+       ORDER BY
+         CASE ce.status WHEN 'pending' THEN 0 ELSE 1 END,
+         ce.created_at DESC`,
+      [centerId],
+    );
+
+    return result.rows.map((r) => ({
+      id: r.id as string,
+      center_id: r.center_id as string,
+      user_id: r.user_id as string,
+      username: (r.username as string) ?? (r.first_name as string) ?? 'User',
+      status: r.status as 'pending' | 'approved' | 'rejected',
+      created_at:
+        r.created_at instanceof Date
+          ? r.created_at.toISOString()
+          : String(r.created_at),
+      reviewed_at: r.reviewed_at
+        ? r.reviewed_at instanceof Date
+          ? r.reviewed_at.toISOString()
+          : String(r.reviewed_at)
+        : null,
+    }));
+  }
+
+  // ============================================================
+  // OWNER: So'rovni tasdiqlash
+  // PATCH /training-centers/my/enrollment-requests/:requestId/approve
+  // ============================================================
+  async approveEnrollment(
+    requestId: string,
+    ownerId: string,
+  ): Promise<{ success: boolean }> {
+    // Owner o'zining markaziga tegishli ekanligini tekshir
+    const res = await this.pool.query(
+      `SELECT ce.id FROM center_enrollments ce
+       JOIN training_centers tc ON tc.id = ce.center_id
+       WHERE ce.id = $1 AND tc.owner_id = $2 AND ce.status = 'pending'`,
+      [requestId, ownerId],
+    );
+    if (!res.rows.length) {
+      throw new NotFoundException(
+        'Enrollment request not found or already processed',
+      );
+    }
+
+    await this.pool.query(
+      `UPDATE center_enrollments
+       SET status = 'approved', reviewed_at = NOW()
+       WHERE id = $1`,
+      [requestId],
+    );
+
+    return { success: true };
+  }
+
+  // ============================================================
+  // OWNER: So'rovni rad etish
+  // PATCH /training-centers/my/enrollment-requests/:requestId/reject
+  // ============================================================
+  async rejectEnrollment(
+    requestId: string,
+    ownerId: string,
+    note?: string,
+  ): Promise<{ success: boolean }> {
+    const res = await this.pool.query(
+      `SELECT ce.id FROM center_enrollments ce
+       JOIN training_centers tc ON tc.id = ce.center_id
+       WHERE ce.id = $1 AND tc.owner_id = $2 AND ce.status = 'pending'`,
+      [requestId, ownerId],
+    );
+    if (!res.rows.length) {
+      throw new NotFoundException(
+        'Enrollment request not found or already processed',
+      );
+    }
+
+    await this.pool.query(
+      `UPDATE center_enrollments
+       SET status = 'rejected', reviewed_at = NOW(), owner_note = $2
+       WHERE id = $1`,
+      [requestId, note ?? null],
+    );
+
+    return { success: true };
+  }
+
+  // ============================================================
+  // REYTING
   // ============================================================
   async rate(
     centerId: string,
     userId: string,
     rating: number,
-  ): Promise<{ rating: number; rating_count: number; user_rating: number }> {
+  ): Promise<{
+    rating: number;
+    rating_count: number;
+    user_rating: number;
+  }> {
     const centerRes = await this.pool.query(
       `SELECT id FROM training_centers WHERE id = $1 AND status = 'approved'`,
       [centerId],
     );
-    if (!centerRes.rows.length) {
+    if (!centerRes.rows.length)
       throw new NotFoundException('Training center not found');
-    }
 
-    if (rating < 1 || rating > 5) {
-      throw new BadRequestException('Rating must be between 1 and 5');
-    }
+    if (rating < 1 || rating > 5)
+      throw new BadRequestException('Rating must be 1-5');
 
-    // Upsert (INSERT yoki UPDATE)
     await this.pool.query(
       `INSERT INTO center_ratings (center_id, user_id, rating)
        VALUES ($1, $2, $3)
@@ -354,7 +469,6 @@ export class TrainingCentersService {
       [centerId, userId, rating],
     );
 
-    // Trigger avtomatik avg hisoblaydi, faqat yangi qiymatni qaytaramiz
     const updated = await this.pool.query(
       `SELECT rating, rating_count FROM training_centers WHERE id = $1`,
       [centerId],
@@ -368,8 +482,7 @@ export class TrainingCentersService {
   }
 
   // ============================================================
-  // ADMIN: Barcha markazlar ro'yxati (filter bilan)
-  // GET /admin/training-centers
+  // ADMIN METHODS
   // ============================================================
   async adminList(params: {
     page?: number;
@@ -390,7 +503,6 @@ export class TrainingCentersService {
       values.push(params.status);
       idx++;
     }
-
     if (params.search) {
       conditions.push(
         `(tc.name ILIKE $${idx} OR tc.city ILIKE $${idx} OR u.telegram_username ILIKE $${idx})`,
@@ -403,17 +515,12 @@ export class TrainingCentersService {
 
     const [listResult, countResult] = await Promise.all([
       this.pool.query(
-        `SELECT
-           tc.*,
-           u.id               AS owner_id,
-           u.telegram_username AS owner_username,
-           u.telegram_first_name AS owner_first_name
+        `SELECT tc.*, u.id AS owner_id, u.telegram_username AS owner_username,
+                u.telegram_first_name AS owner_first_name
          FROM training_centers tc
          LEFT JOIN users u ON u.id = tc.owner_id
          ${where}
-         ORDER BY
-           CASE tc.status WHEN 'pending' THEN 0 WHEN 'approved' THEN 1 ELSE 2 END,
-           tc.created_at DESC
+         ORDER BY CASE tc.status WHEN 'pending' THEN 0 WHEN 'approved' THEN 1 ELSE 2 END, tc.created_at DESC
          LIMIT $${idx} OFFSET $${idx + 1}`,
         [...values, limit, offset],
       ),
@@ -431,33 +538,21 @@ export class TrainingCentersService {
     };
   }
 
-  // ============================================================
-  // ADMIN: Tasdiqlash
-  // ============================================================
   async adminApprove(
     centerId: string,
     adminId: string,
   ): Promise<TrainingCenterResponse> {
     const result = await this.pool.query(
       `UPDATE training_centers
-       SET status = 'approved', is_listed = TRUE,
-           approved_at = NOW(), reviewed_by = $2,
-           rejection_reason = NULL
-       WHERE id = $1
-       RETURNING *`,
+       SET status='approved', is_listed=TRUE, approved_at=NOW(), reviewed_by=$2, rejection_reason=NULL
+       WHERE id=$1 RETURNING id`,
       [centerId, adminId],
     );
-
-    if (!result.rows.length) {
+    if (!result.rows.length)
       throw new NotFoundException('Training center not found');
-    }
-
     return this.getById(centerId);
   }
 
-  // ============================================================
-  // ADMIN: Rad etish
-  // ============================================================
   async adminReject(
     centerId: string,
     adminId: string,
@@ -465,70 +560,55 @@ export class TrainingCentersService {
   ): Promise<TrainingCenterResponse> {
     const result = await this.pool.query(
       `UPDATE training_centers
-       SET status = 'rejected', is_listed = FALSE,
-           reviewed_by = $2,
-           rejection_reason = $3
-       WHERE id = $1
-       RETURNING *`,
+       SET status='rejected', is_listed=FALSE, reviewed_by=$2, rejection_reason=$3
+       WHERE id=$1 RETURNING id`,
       [centerId, adminId, reason ?? null],
     );
-
-    if (!result.rows.length) {
+    if (!result.rows.length)
       throw new NotFoundException('Training center not found');
-    }
-
     return this.getById(centerId);
   }
 
-  // ============================================================
-  // ADMIN: Ko'rinishini yoqish/o'chirish (toggle listing)
-  // ============================================================
   async adminToggleListing(centerId: string): Promise<TrainingCenterResponse> {
     const result = await this.pool.query(
-      `UPDATE training_centers
-       SET is_listed = NOT is_listed
-       WHERE id = $1 AND status = 'approved'
-       RETURNING *`,
+      `UPDATE training_centers SET is_listed = NOT is_listed
+       WHERE id=$1 AND status='approved' RETURNING id`,
       [centerId],
     );
-
-    if (!result.rows.length) {
+    if (!result.rows.length)
       throw new NotFoundException('Approved training center not found');
-    }
-
     return this.getById(centerId);
   }
 
   // ============================================================
-  // PRIVATE: ID bo'yicha bitta markaz (admin uchun)
+  // PRIVATE: ID bo'yicha markaz (har qanday status)
   // ============================================================
   async getById(id: string, userId?: string): Promise<TrainingCenterResponse> {
-    const enrolledSubquery = userId
-      ? `(SELECT 1 FROM center_enrollments ce WHERE ce.center_id = tc.id AND ce.user_id = '${userId}') IS NOT NULL`
+    const enrolledSub = userId
+      ? `EXISTS(SELECT 1 FROM center_enrollments ce WHERE ce.center_id = tc.id AND ce.user_id = '${userId}' AND ce.status = 'approved')`
       : 'FALSE';
 
-    const userRatingSubquery = userId
+    const pendingSub = userId
+      ? `EXISTS(SELECT 1 FROM center_enrollments ce WHERE ce.center_id = tc.id AND ce.user_id = '${userId}' AND ce.status = 'pending')`
+      : 'FALSE';
+
+    const userRatingSub = userId
       ? `(SELECT cr.rating FROM center_ratings cr WHERE cr.center_id = tc.id AND cr.user_id = '${userId}' LIMIT 1)`
       : 'NULL';
 
     const result = await this.pool.query(
-      `SELECT
-         tc.*,
-         u.id               AS owner_id,
-         u.telegram_username AS owner_username,
-         u.telegram_first_name AS owner_first_name,
-         ${enrolledSubquery}   AS is_enrolled,
-         ${userRatingSubquery} AS user_rating
+      `SELECT tc.*, u.id AS owner_id, u.telegram_username AS owner_username,
+              u.telegram_first_name AS owner_first_name,
+              ${enrolledSub}  AS is_enrolled,
+              ${pendingSub}   AS is_request_pending,
+              ${userRatingSub} AS user_rating
        FROM training_centers tc
        LEFT JOIN users u ON u.id = tc.owner_id
        WHERE tc.id = $1`,
       [id],
     );
-
-    if (!result.rows.length) {
+    if (!result.rows.length)
       throw new NotFoundException('Training center not found');
-    }
-
     return this.formatCenter(result.rows[0]);
   }
 
@@ -536,12 +616,11 @@ export class TrainingCentersService {
   // PRIVATE: DB row → API response
   // ============================================================
   private formatCenter(row: Record<string, unknown>): TrainingCenterResponse {
-    const toStr = (val: unknown): string | null => {
-      if (val === null || val === undefined) return null;
-      if (val instanceof Date) return val.toISOString();
-      if (typeof val === 'string') return val;
-      if (typeof val === 'number' || typeof val === 'boolean')
-        return String(val);
+    const toStr = (v: unknown): string | null => {
+      if (v == null) return null;
+      if (v instanceof Date) return v.toISOString();
+      if (typeof v === 'string') return v;
+      if (typeof v === 'number' || typeof v === 'boolean') return String(v);
       return null;
     };
 
@@ -572,6 +651,7 @@ export class TrainingCentersService {
       approved_at: toStr(row.approved_at),
       created_at: toStr(row.created_at) ?? new Date().toISOString(),
       is_enrolled: Boolean(row.is_enrolled),
+      is_request_pending: Boolean(row.is_request_pending),
       user_rating: row.user_rating != null ? Number(row.user_rating) : null,
     };
   }
