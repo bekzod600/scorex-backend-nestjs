@@ -255,6 +255,28 @@ export class TrainingCentersService {
   }
 
   // ============================================================
+  // AUTH: Owner o'z markazini o'chiradi
+  // DELETE /training-centers/my
+  // ============================================================
+  async deleteMy(userId: string): Promise<{ success: boolean }> {
+    const { rows } = await this.pool.query(
+      `SELECT id FROM training_centers WHERE owner_id = $1`,
+      [userId],
+    );
+
+    if (!rows.length) {
+      throw new NotFoundException('You do not have a training center');
+    }
+
+    await this.pool.query(
+      `DELETE FROM training_centers WHERE owner_id = $1`,
+      [userId],
+    );
+
+    return { success: true };
+  }
+
+  // ============================================================
   // AUTH: "Studied here" SO'ROV yuborish (to'g'ridan enrollment emas!)
   // POST /training-centers/:id/enroll
   // ============================================================

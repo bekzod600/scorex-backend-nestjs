@@ -129,6 +129,14 @@ export class TrainingCentersController {
     return this.service.updateMy(req.user.id, dto);
   }
 
+  /** DELETE /training-centers/my — owner o'z markazini o'chiradi */
+  @UseGuards(JwtAuthGuard)
+  @Delete('my')
+  @HttpCode(HttpStatus.OK)
+  deleteMy(@Req() req: AuthenticatedRequest) {
+    return this.service.deleteMy(req.user.id);
+  }
+
   /**
    * POST /training-centers/:id/enroll
    * "Studied here" — so'rov yuborish (TO'G'RIDAN ENROLLMENT EMAS!)
