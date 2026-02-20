@@ -29,6 +29,7 @@ import { RequestLoggerMiddleware } from './common/middlewares/request-logger.mid
 import { TelegramModule } from './telegram/telegram.module';
 import { JobsModule } from './jobs/jobs.module';
 import { NewsModule } from './news/news.module';
+import { TrainingCentersModule } from './training-centers/training-centers.module';
 
 @Module({
   imports: [
@@ -54,11 +55,12 @@ import { NewsModule } from './news/news.module';
     AdminModule,
     TelegramModule,
     JobsModule,
-    TradersModule, // YANGI
+    TradersModule,
     SubscriptionsModule,
     FavoritesModule,
     SubscriptionModule,
     NewsModule,
+    TrainingCentersModule,
   ],
   providers: [
     {
