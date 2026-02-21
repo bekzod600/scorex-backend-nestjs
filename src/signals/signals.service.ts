@@ -6,6 +6,7 @@ import {
   Injectable,
   BadRequestException,
   NotFoundException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { Pool } from 'pg';
 import { CreateSignalDto } from './dto/create-signal.dto';
@@ -232,6 +233,45 @@ export class SignalsService {
     return {
       signals: rows.map((s) => this.formatSignalResponse(s, ownerAccess, tab)),
       total: rows.length,
+    };
+  }
+
+  /**
+   * Cancel signal — only the owner can cancel
+   * POST /me/signals/:id/cancel
+   */
+  async cancelOwnSignal(userId: string, signalId: string) {
+    const { rows } = await this.pool.query(
+      `SELECT id, seller_id, status FROM signals WHERE id = $1 LIMIT 1`,
+      [signalId],
+    );
+
+    if (!rows[0]) {
+      throw new NotFoundException('Signal not found');
+    }
+
+    if ((rows[0].seller_id as string) !== userId) {
+      throw new ForbiddenException('You can only cancel your own signals');
+    }
+
+    const nonCancellable = ['CLOSED_TP', 'CLOSED_SL', 'CANCELED'];
+    if (nonCancellable.includes(rows[0].status as string)) {
+      throw new BadRequestException(
+        `Cannot cancel a signal with status: ${rows[0].status}`,
+      );
+    }
+
+    const { rows: updated } = await this.pool.query(
+      `UPDATE signals
+       SET status = 'CANCELED', closed_at = NOW()
+       WHERE id = $1
+       RETURNING id, status`,
+      [signalId],
+    );
+
+    return {
+      success: true,
+      signal: { id: updated[0].id, status: updated[0].status },
     };
   }
 

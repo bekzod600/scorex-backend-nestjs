@@ -8,6 +8,7 @@ import { MeController } from './me.controller';
 import { DatabaseModule } from '../../database/database.module';
 import { SignalsModule } from '../signals/signals.module';
 import { FavoritesModule } from '../favorites/favorites.module';
+import { TradersModule } from '../traders/traders.module';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import type { EnvVars } from '../../config/env.validation';
 
@@ -16,6 +17,7 @@ import type { EnvVars } from '../../config/env.validation';
     DatabaseModule,
     forwardRef(() => SignalsModule), // Circular dependency oldini olish
     FavoritesModule,
+    TradersModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],

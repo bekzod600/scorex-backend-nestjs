@@ -268,10 +268,9 @@ export class TrainingCentersService {
       throw new NotFoundException('You do not have a training center');
     }
 
-    await this.pool.query(
-      `DELETE FROM training_centers WHERE owner_id = $1`,
-      [userId],
-    );
+    await this.pool.query(`DELETE FROM training_centers WHERE owner_id = $1`, [
+      userId,
+    ]);
 
     return { success: true };
   }

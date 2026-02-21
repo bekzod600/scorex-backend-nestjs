@@ -192,6 +192,102 @@ export class TradersService {
     };
   }
 
+  /**
+   * GET /me/stats endpoint uchun — user ID bo'yicha stats
+   * Signalsiz yangi userlar uchun ham 0 qaytaradi (exception emas)
+   */
+  async findByUserId(userId: string) {
+    const { rows } = await this.pool.query(
+      `
+      WITH trader_stats AS (
+        SELECT 
+          seller_id,
+          COUNT(*)::int                                                    AS total_signals,
+          COUNT(*) FILTER (WHERE status = 'CLOSED_TP')::int               AS successful_signals,
+          COALESCE(AVG(
+            CASE WHEN status IN ('CLOSED_TP','CLOSED_SL')
+            THEN EXTRACT(EPOCH FROM (closed_at - created_at)) / 86400
+            ELSE NULL END
+          ), 0)::numeric(5,2)                                             AS avg_days,
+          COALESCE(AVG(
+            CASE WHEN status = 'CLOSED_TP' THEN 10
+                WHEN status = 'CLOSED_SL' THEN -5
+                ELSE 0 END
+          ), 0)::numeric(5,2)                                             AS avg_profit_percent
+        FROM signals
+        WHERE seller_id = $1
+        GROUP BY seller_id
+      ),
+      subscriber_counts AS (
+        SELECT COUNT(*)::int AS subscribers
+        FROM subscriptions
+        WHERE trader_id = $1
+      ),
+      trader_ratings AS (
+        SELECT COALESCE(AVG(stars), 0)::numeric(3,2) AS avg_stars
+        FROM trader_stars
+        WHERE trader_id = $1
+      ),
+      my_rank AS (
+        SELECT COUNT(*)::int + 1 AS rank
+        FROM users
+        WHERE score_x > (SELECT COALESCE(score_x, 0) FROM users WHERE id = $1)
+      )
+      SELECT
+        u.id,
+        u.telegram_username                                               AS username,
+        COALESCE(u.display_name, u.telegram_first_name, u.telegram_username) AS display_name,
+        u.avatar,
+        COALESCE(u.score_x, 0)::int                                      AS score_x_points,
+        COALESCE(ts.total_signals, 0)                                    AS total_signals,
+        COALESCE(ts.successful_signals, 0)                               AS successful_signals,
+        COALESCE(tr.avg_stars, 0)                                        AS avg_stars,
+        COALESCE(ts.avg_profit_percent, 0)                               AS total_pl_percent,
+        COALESCE(sc.subscribers, 0)                                      AS subscribers,
+        COALESCE(ts.avg_days, 0)                                         AS avg_days_to_result,
+        (SELECT rank FROM my_rank)                                       AS rank,
+        u.created_at
+      FROM users u
+      LEFT JOIN trader_stats ts ON TRUE
+      LEFT JOIN subscriber_counts sc ON TRUE
+      LEFT JOIN trader_ratings tr ON TRUE
+      WHERE u.id = $1
+      LIMIT 1
+      `,
+      [userId],
+    );
+
+    if (!rows[0]) {
+      return {
+        scoreXPoints: 0,
+        rank: 0,
+        totalSignals: 0,
+        successfulSignals: 0,
+        avgStars: 0,
+        totalPLPercent: 0,
+        subscribers: 0,
+        avgDaysToResult: 0,
+      };
+    }
+
+    const row = rows[0];
+    return {
+      id: row.id,
+      username: row.username,
+      displayName: row.display_name,
+      avatar: row.avatar,
+      scoreXPoints: Number(row.score_x_points),
+      rank: Number(row.rank),
+      totalSignals: Number(row.total_signals),
+      successfulSignals: Number(row.successful_signals),
+      avgStars: Number(row.avg_stars),
+      totalPLPercent: Number(row.total_pl_percent),
+      subscribers: Number(row.subscribers),
+      avgDaysToResult: Number(row.avg_days_to_result),
+      createdAt: row.created_at,
+    };
+  }
+
   async getSignalsByUsername(
     username: string,
     params?: { tab?: 'live' | 'results' },
