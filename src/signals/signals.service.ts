@@ -200,7 +200,7 @@ export class SignalsService {
    * Get user's own signals (always unlocked)
    */
   async getMySignals(userId: string, params?: { tab?: 'live' | 'results' }) {
-    const tab = params?.tab || 'live';
+    const tab = params?.tab;
 
     let statusFilter = '';
     if (tab === 'live') {
