@@ -50,13 +50,17 @@ export class TelegramController {
 
       if (parts.length === 1) {
         // login_id yo'q — WebApp tugmasi bilan welcome xabar
-        await this.telegram.sendMessageWithWebApp(
-          chatId,
-          '👋 <b>Welcome to ScoreX!</b>\n\n' +
-            '📊 Professional halal stock signals marketplace.\n\n' +
-            '👇 Tap the button below to open the app:',
-          '📱 Open ScoreX',
-        );
+        try {
+          await this.telegram.sendMessageWithWebApp(
+            chatId,
+            '👋 <b>Welcome to ScoreX!</b>\n\n' +
+              '📊 Professional halal stock signals marketplace.\n\n' +
+              '👇 Tap the button below to open the app:',
+            '📱 Open ScoreX',
+          );
+        } catch (err) {
+          this.logger.warn(`⚠️ Failed to send welcome to ${chatId}: ${err?.message || err}`);
+        }
         return { ok: true };
       }
 
@@ -72,14 +76,17 @@ export class TelegramController {
           telegramUser.last_name,
         );
 
-        // Login muvaffaqiyatli — WebApp tugma bilan javob
-        await this.telegram.sendMessageWithWebApp(
-          chatId,
-          '✅ <b>Login Successful!</b>\n\n' +
-            'You are now logged in. You can return to your browser or open the app below.\n\n' +
-            `User ID: <code>${result.user.id}</code>`,
-          '📱 Open ScoreX',
-        );
+        try {
+          await this.telegram.sendMessageWithWebApp(
+            chatId,
+            '✅ <b>Login Successful!</b>\n\n' +
+              'You are now logged in. You can return to your browser or open the app below.\n\n' +
+              `User ID: <code>${result.user.id}</code>`,
+            '📱 Open ScoreX',
+          );
+        } catch (sendErr) {
+          this.logger.warn(`⚠️ Failed to send success msg to ${chatId}: ${sendErr?.message || sendErr}`);
+        }
 
         this.logger.log(
           `✅ Login confirmed for Telegram ID ${telegramUser.id}`,
@@ -87,13 +94,17 @@ export class TelegramController {
       } catch (error) {
         this.logger.error(`❌ Login failed: ${error.message}`);
 
-        await this.telegram.sendMessageWithWebApp(
-          chatId,
-          '❌ <b>Login Failed</b>\n\n' +
-            'This login link may have expired or is invalid.\n' +
-            'Please try again, or open the app directly:',
-          '📱 Open ScoreX',
-        );
+        try {
+          await this.telegram.sendMessageWithWebApp(
+            chatId,
+            '❌ <b>Login Failed</b>\n\n' +
+              'This login link may have expired or is invalid.\n' +
+              'Please try again, or open the app directly:',
+            '📱 Open ScoreX',
+          );
+        } catch (sendErr) {
+          this.logger.warn(`⚠️ Failed to send error msg to ${chatId}: ${sendErr?.message || sendErr}`);
+        }
       }
 
       return { ok: true };
@@ -101,36 +112,48 @@ export class TelegramController {
 
     // ── /help command ──
     if (text === '/help') {
-      await this.telegram.sendMessageWithWebApp(
-        chatId,
-        '🤖 <b>ScoreX Bot Commands</b>\n\n' +
-          '/start - Welcome message & open app\n' +
-          '/help - Show this message\n' +
-          '/webapp - Open the trading app\n\n' +
-          '👇 Tap the button to open ScoreX:',
-        '📱 Open ScoreX',
-      );
+      try {
+        await this.telegram.sendMessageWithWebApp(
+          chatId,
+          '🤖 <b>ScoreX Bot Commands</b>\n\n' +
+            '/start - Welcome message & open app\n' +
+            '/help - Show this message\n' +
+            '/webapp - Open the trading app\n\n' +
+            '👇 Tap the button to open ScoreX:',
+          '📱 Open ScoreX',
+        );
+      } catch (err) {
+        this.logger.warn(`⚠️ Failed to send help to ${chatId}: ${err?.message || err}`);
+      }
       return { ok: true };
     }
 
     // ── /webapp command ──
     if (text === '/webapp') {
-      await this.telegram.sendMessageWithWebApp(
-        chatId,
-        '📱 <b>Open ScoreX App</b>\n\n' +
-          'Tap the button below to open the trading app:',
-        '📱 Open ScoreX',
-      );
+      try {
+        await this.telegram.sendMessageWithWebApp(
+          chatId,
+          '📱 <b>Open ScoreX App</b>\n\n' +
+            'Tap the button below to open the trading app:',
+          '📱 Open ScoreX',
+        );
+      } catch (err) {
+        this.logger.warn(`⚠️ Failed to send webapp to ${chatId}: ${err?.message || err}`);
+      }
       return { ok: true };
     }
 
     // ── Noma'lum command ──
-    await this.telegram.sendMessageWithWebApp(
-      chatId,
-      "I didn't understand that command.\n\n" +
-        'Use /help to see available commands, or open the app:',
-      '📱 Open ScoreX',
-    );
+    try {
+      await this.telegram.sendMessageWithWebApp(
+        chatId,
+        "I didn't understand that command.\n\n" +
+          'Use /help to see available commands, or open the app:',
+        '📱 Open ScoreX',
+      );
+    } catch (err) {
+      this.logger.warn(`⚠️ Failed to send unknown cmd msg to ${chatId}: ${err?.message || err}`);
+    }
 
     return { ok: true };
   }

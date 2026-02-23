@@ -259,10 +259,10 @@ export class AuthService {
       throw new UnauthorizedException('Invalid initData: hash mismatch');
     }
 
-    // 5. auth_date ni tekshirish (5 daqiqadan eski bo'lmasligi kerak)
+    // 5. auth_date ni tekshirish (1 soatdan eski bo'lmasligi kerak)
     const authDate = parseInt(params.get('auth_date') || '0', 10);
     const now = Math.floor(Date.now() / 1000);
-    const WEBAPP_AUTH_EXPIRY_SECONDS = 3600; // 5 daqiqa
+    const WEBAPP_AUTH_EXPIRY_SECONDS = 3600; // 1 soat — WebApp uchun
 
     if (now - authDate > WEBAPP_AUTH_EXPIRY_SECONDS) {
       throw new UnauthorizedException('InitData expired');
