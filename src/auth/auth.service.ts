@@ -391,8 +391,8 @@ export class AuthService {
   ): Promise<any> {
     const { rows } = await this.pool.query(
       `
-      INSERT INTO users (telegram_id, telegram_username, telegram_first_name, telegram_last_name, role)
-      VALUES ($1, $2, $3, $4, 'USER')
+      INSERT INTO users (telegram_id, telegram_username, telegram_first_name, telegram_last_name, role, score_x)
+      VALUES ($1, $2, $3, $4, 'user')
       RETURNING *
       `,
       [telegramId, telegramUsername, telegramFirstName, telegramLastName],
